@@ -107,6 +107,10 @@ async fn clone_repo(repo_url: &str, project_name: &str) -> Result<PathBuf> {
             warn!("Git pull failed, performing fresh clone");
             let _ = std::fs::remove_dir_all(&build_dir);
         }
+    } else if build_dir.exists() {
+        // Directory exists but is not a git repo - remove it
+        warn!("Directory {} exists but is not a git repository. Removing for fresh clone.", deploy_dir);
+        std::fs::remove_dir_all(&build_dir)?;
     }
 
     // Create parent directory if needed
