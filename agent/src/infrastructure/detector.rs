@@ -215,14 +215,28 @@ async fn detect_shared_resources(docker: &Docker) -> Result<SharedResources> {
 
 /// Detect deployment directories (e.g., ~/apps/*)
 async fn detect_deploy_directories() -> Result<Vec<String>> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-
-    let possible_dirs = vec![
-        format!("{}/apps", home),
-        format!("{}/projects", home),
+    let mut possible_dirs = vec![
         "/opt/apps".to_string(),
         "/var/www".to_string(),
     ];
+
+    // Check all user home directories for apps/projects folders
+    if let Ok(entries) = std::fs::read_dir("/home") {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let user_home = entry.path();
+                    possible_dirs.push(format!("{}/apps", user_home.display()));
+                    possible_dirs.push(format!("{}/projects", user_home.display()));
+                }
+            }
+        }
+    }
+
+    // Also check current user's home
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    possible_dirs.push(format!("{}/apps", home));
+    possible_dirs.push(format!("{}/projects", home));
 
     let mut found_dirs = Vec::new();
 
