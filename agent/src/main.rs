@@ -11,6 +11,22 @@ use crate::webhooks::server::AppState;
 use tokio::sync::broadcast;
 use shipwright_common::protocol::AgentMessage;
 
+use std::net::TcpListener;
+use std::fs;
+
+fn find_available_port(start_port: u16) -> u16 {
+    let mut port = start_port;
+    loop {
+        if TcpListener::bind(format!("0.0.0.0:{}", port)).is_ok() {
+            return port;
+        }
+        port += 1;
+        if port > start_port + 100 {
+            panic!("Could not find an available port in range {}-{}", start_port, start_port + 100);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -22,8 +38,22 @@ async fn main() -> anyhow::Result<()> {
     // Channel for broadcasting build events to all connected WebSocket clients
     let (tx, _rx) = broadcast::channel::<AgentMessage>(100);
 
-    let ws_addr = "0.0.0.0:8081";
-    let http_addr = "0.0.0.0:8083";
+    // Dynamic Port Discovery
+    let ws_port = find_available_port(8081);
+    let http_port = find_available_port(8083);
+
+    let ws_addr = format!("0.0.0.0:{}", ws_port);
+    let http_addr = format!("0.0.0.0:{}", http_port);
+
+    // Persist port selection for CLI discovery
+    let state_dir = "/etc/shipwright";
+    let _ = fs::create_dir_all(state_dir);
+    let state_file = format!("{}/agent.env", state_dir);
+    let state_content = format!("SHIPWRIGHT_WS_PORT={}\nSHIPWRIGHT_HTTP_PORT={}\n", ws_port, http_port);
+    if let Err(_e) = fs::write(&state_file, state_content) {
+        // Fallback to local directory if /etc isn't writable (e.g. during dev)
+        fs::write("agent.env", format!("SHIPWRIGHT_WS_PORT={}\nSHIPWRIGHT_HTTP_PORT={}\n", ws_port, http_port))?;
+    }
 
     info!("Starting Shipwright Agent...");
 
@@ -32,13 +62,15 @@ async fn main() -> anyhow::Result<()> {
         broadcast_tx: tx.clone(),
     };
 
+    let ws_addr_clone = ws_addr.clone();
     let ws_tx = tx.clone();
     let ws_handle = tokio::spawn(async move {
-        websocket::server::start_server(ws_addr, ws_tx).await
+        websocket::server::start_server(&ws_addr_clone, ws_tx).await
     });
 
+    let http_addr_clone = http_addr.clone();
     let http_handle = tokio::spawn(async move {
-        webhooks::server::start_server(http_addr, state).await
+        webhooks::server::start_server(&http_addr_clone, state).await
     });
 
     info!("Agent is running. WebSockets: {}, Webhooks: {}", ws_addr, http_addr);

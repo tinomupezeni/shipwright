@@ -6,6 +6,25 @@ use dialoguer::{Input, theme::ColorfulTheme};
 use octocrab::Octocrab;
 use serde_json::json;
 
+use crate::docker::deploy::execute_remote_command;
+
+async fn discover_agent_ports(vps: &shipwright_common::config::VpsConfig) -> Result<(u16, u16)> {
+    let output = execute_remote_command(vps, "cat /etc/shipwright/agent.env || cat agent.env")?;
+    
+    let mut ws_port = 8081;
+    let mut http_port = 8083;
+
+    for line in output.lines() {
+        if line.starts_with("SHIPWRIGHT_WS_PORT=") {
+            ws_port = line.replace("SHIPWRIGHT_WS_PORT=", "").parse()?;
+        } else if line.starts_with("SHIPWRIGHT_HTTP_PORT=") {
+            http_port = line.replace("SHIPWRIGHT_HTTP_PORT=", "").parse()?;
+        }
+    }
+
+    Ok((ws_port, http_port))
+}
+
 pub async fn run() -> Result<()> {
     // 1. Read config
     let config_path = std::path::Path::new(".shipwright.yml");
@@ -18,7 +37,12 @@ pub async fn run() -> Result<()> {
     
     let vps = config.deploy.vps.as_ref().context("No VPS configured in .shipwright.yml")?;
 
-    // 2. Get GitHub info
+    // 2. Discover Agent Ports
+    println!("🔍 Discovering Agent ports on {}...", vps.host);
+    let (_ws_port, http_port) = discover_agent_ports(vps).await?;
+    println!("📡 Agent found listening on port {}", http_port);
+
+    // 3. Get GitHub info
     let git_remote = Command::new("git")
         .args(["remote", "get-url", "origin"])
         .output()?;
@@ -37,8 +61,8 @@ pub async fn run() -> Result<()> {
     let client = reqwest::Client::new();
     let webhook_secret = uuid::Uuid::new_v4().to_string();
     
-    // Use the registration endpoint on the agent
-    let agent_url = format!("http://{}:8083/projects", vps.host);
+    // Use the registration endpoint on the discovered port
+    let agent_url = format!("http://{}:{}/projects", vps.host, http_port);
     let res = client.post(&agent_url)
         .json(&json!({
             "name": repo,
@@ -63,7 +87,7 @@ pub async fn run() -> Result<()> {
         .personal_token(github_token)
         .build()?;
 
-    let webhook_url = format!("http://{}:8083/webhooks/github", vps.host);
+    let webhook_url = format!("http://{}:{}/webhooks/github", vps.host, http_port);
     
     let route = format!("/repos/{owner}/{repo}/hooks");
     let payload = json!({
