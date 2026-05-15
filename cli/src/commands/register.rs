@@ -79,12 +79,32 @@ pub async fn run() -> Result<()> {
     println!("✅ Project registered with Shipwright Agent.");
 
     // 4. Setup GitHub Webhook
-    let github_token: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter your GitHub Personal Access Token (PAT) with 'repo' scope")
-        .interact_text()?;
+    let token_path = shellexpand::tilde("~/.shipwright/github_token").to_string();
+    let mut github_token = fs::read_to_string(&token_path).ok().map(|t| t.trim().to_string());
+
+    if github_token.is_none() {
+        println!("\n🔑 GitHub Authentication Required");
+        println!("To automate your deployments, Shipwright needs a Personal Access Token (PAT) to create webhooks.");
+        println!("\nHow to get one:");
+        println!("  1. Go to: https://github.com/settings/tokens");
+        println!("  2. Click 'Generate new token' (Classic is easiest).");
+        println!("  3. Select the 'repo' scope.");
+        println!("  4. Copy the token and paste it here.\n");
+
+        let input: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Enter your GitHub PAT")
+            .interact_text()?;
+        
+        let _ = fs::create_dir_all(shellexpand::tilde("~/.ssh").to_string()); // Ensure base exists
+        let ship_dir = shellexpand::tilde("~/.shipwright").to_string();
+        let _ = fs::create_dir_all(&ship_dir);
+        fs::write(&token_path, &input)?;
+        println!("💾 Token saved securely for future use.");
+        github_token = Some(input);
+    }
 
     let octocrab = Octocrab::builder()
-        .personal_token(github_token)
+        .personal_token(github_token.unwrap())
         .build()?;
 
     let webhook_url = format!("http://{}:{}/webhooks/github", vps.host, http_port);
