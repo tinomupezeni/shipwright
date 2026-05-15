@@ -14,29 +14,31 @@ use shipwright_common::protocol::AgentMessage;
 use std::net::TcpListener;
 use std::fs;
 
-fn find_available_port(start_port: u16) -> u16 {
-    let mut port = start_port;
-    loop {
-        if TcpListener::bind(format!("0.0.0.0:{}", port)).is_ok() {
-            return port;
-        }
-        port += 1;
-        if port > start_port + 100 {
-            panic!("Could not find an available port in range {}-{}", start_port, start_port + 100);
-        }
-    }
-}
-
 fn open_firewall_port(port: u16) {
-    info!("🛡️  Automatically opening port {} in firewall...", port);
-    let output = std::process::Command::new("sudo")
-        .args(["ufw", "allow", &format!("{}/tcp", port)])
+    info!("🛡️  Opening port {} in firewall...", port);
+    
+    // 1. Try UFW first (common on Ubuntu/Debian)
+    let ufw_output = std::process::Command::new("ufw")
+        .args(["allow", &format!("{}/tcp", port)])
         .output();
     
-    match output {
-        Ok(out) if out.status.success() => info!("✅ Port {} opened successfully.", port),
-        Ok(out) => info!("⚠️  Note: Could not automatically open port {} (UFW might be disabled or missing sudo)", port),
-        Err(_) => info!("⚠️  Note: Firewall command failed. Please ensure port {} is open manually.", port),
+    if let Ok(out) = ufw_output {
+        if out.status.success() {
+            info!("✅ UFW: Port {} opened.", port);
+            return;
+        }
+    }
+
+    // 2. Fallback to raw iptables if UFW failed or isn't present
+    info!("🔗 UFW failed, trying raw iptables fallback for port {}...", port);
+    let iptables_output = std::process::Command::new("iptables")
+        .args(["-I", "INPUT", "-p", "tcp", "--dport", &port.to_string(), "-j", "ACCEPT"])
+        .output();
+
+    match iptables_output {
+        Ok(out) if out.status.success() => info!("✅ iptables: Port {} opened.", port),
+        Ok(out) => error!("❌ Both UFW and iptables failed for port {}: {}", port, String::from_utf8_lossy(&out.stderr)),
+        Err(e) => error!("❌ Firewall execution error: {}", e),
     }
 }
 
