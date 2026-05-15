@@ -141,6 +141,10 @@ pub struct BuildConfig {
 
     /// Services to build (if using compose with selective builds)
     pub services: Option<Vec<String>>,
+
+    /// Environment variables for build/deployment
+    /// These will be written to .env file if it doesn't exist
+    pub environment: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
