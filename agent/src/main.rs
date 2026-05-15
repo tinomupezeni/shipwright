@@ -6,13 +6,26 @@ mod pipeline;
 
 use tracing_subscriber;
 use std::sync::{Arc, Mutex};
-use tracing::info;
+use tracing::{info, error};
 use crate::webhooks::server::AppState;
 use tokio::sync::broadcast;
 use shipwright_common::protocol::AgentMessage;
 
 use std::net::TcpListener;
 use std::fs;
+
+fn find_available_port(start_port: u16) -> u16 {
+    let mut port = start_port;
+    loop {
+        if TcpListener::bind(format!("0.0.0.0:{}", port)).is_ok() {
+            return port;
+        }
+        port += 1;
+        if port > start_port + 100 {
+            panic!("Could not find an available port in range {}-{}", start_port, start_port + 100);
+        }
+    }
+}
 
 fn open_firewall_port(port: u16) {
     info!("🛡️  Opening port {} in firewall...", port);
