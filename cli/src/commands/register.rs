@@ -55,7 +55,7 @@ pub async fn run() -> Result<()> {
     let owner = &caps[1];
     let repo = &caps[2];
 
-    println!("Registering {}/{} with Shipwright Agent on {}...", owner, repo, vps.host);
+    println!("Registering {} ({}/{}) with Shipwright Agent on {}...", repo, owner, repo, vps.host);
 
     // 3. Register with Agent
     let client = reqwest::Client::new();

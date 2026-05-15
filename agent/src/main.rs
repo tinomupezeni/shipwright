@@ -27,6 +27,19 @@ fn find_available_port(start_port: u16) -> u16 {
     }
 }
 
+fn open_firewall_port(port: u16) {
+    info!("🛡️  Automatically opening port {} in firewall...", port);
+    let output = std::process::Command::new("sudo")
+        .args(["ufw", "allow", &format!("{}/tcp", port)])
+        .output();
+    
+    match output {
+        Ok(out) if out.status.success() => info!("✅ Port {} opened successfully.", port),
+        Ok(out) => info!("⚠️  Note: Could not automatically open port {} (UFW might be disabled or missing sudo)", port),
+        Err(_) => info!("⚠️  Note: Firewall command failed. Please ensure port {} is open manually.", port),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -44,6 +57,10 @@ async fn main() -> anyhow::Result<()> {
 
     let ws_addr = format!("0.0.0.0:{}", ws_port);
     let http_addr = format!("0.0.0.0:{}", http_port);
+
+    // Automatic Firewall Management
+    open_firewall_port(ws_port);
+    open_firewall_port(http_port);
 
     // Persist port selection for CLI discovery
     let state_dir = "/etc/shipwright";
