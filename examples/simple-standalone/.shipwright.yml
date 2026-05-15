@@ -1,0 +1,51 @@
+# Example: Simple Single-Project VPS (Standalone Mode)
+# Use case: Fresh VPS with one application, no existing infrastructure
+
+version: 1
+
+project:
+  name: myapp
+  framework: nextjs  # or: django, rails, go, rust, etc.
+
+build:
+  image: node:20-alpine
+  steps:
+    - npm ci
+    - npm run build
+    - npm test
+
+deploy:
+  type: docker
+
+  vps:
+    host: 192.168.1.100
+    user: ubuntu
+    ssh_key: ~/.ssh/id_rsa
+    domain: myapp.example.com  # Optional
+
+  replicas: 1
+
+  health:
+    http:
+      path: /api/health
+      expect: 200
+      timeout: 30s
+
+  resources:
+    memory: 512
+    cpu: 0.5
+
+  smoke_tests:
+    - GET / expect=200
+    - GET /api/health expect=200
+
+# Infrastructure: Let Shipwright handle everything
+infrastructure:
+  strategy: standalone  # Simple container deployment
+  auto_detect: true  # Shipwright figures out the rest
+
+notifications:
+  slack:
+    webhook: https://hooks.slack.com/services/YOUR/WEBHOOK
+    on:
+      - failure

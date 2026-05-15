@@ -6,7 +6,122 @@ pub struct Config {
     pub project: ProjectConfig,
     pub build: BuildConfig,
     pub deploy: DeployConfig,
+    pub infrastructure: Option<InfrastructureConfig>,
     pub notifications: Option<NotificationsConfig>,
+}
+
+/// Infrastructure configuration for existing VPS setups
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InfrastructureConfig {
+    /// Deployment strategy: "standalone", "compose", or "auto"
+    #[serde(default = "default_deploy_strategy")]
+    pub strategy: String,
+
+    /// Directory where projects are deployed (e.g., ~/apps or /opt/apps)
+    pub deploy_dir: Option<String>,
+
+    /// Proxy configuration (Caddy, Nginx, Traefik, or none)
+    pub proxy: Option<ProxyConfig>,
+
+    /// Shared resources (databases, redis, etc.)
+    pub shared_resources: Option<SharedResourcesConfig>,
+
+    /// Docker networks to join
+    #[serde(default)]
+    pub networks: Vec<String>,
+
+    /// Whether to auto-detect existing infrastructure
+    #[serde(default = "default_true")]
+    pub auto_detect: bool,
+}
+
+fn default_deploy_strategy() -> String {
+    "auto".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProxyConfig {
+    /// Proxy type: "caddy", "nginx", "traefik", "none"
+    #[serde(rename = "type")]
+    pub proxy_type: String,
+
+    /// Container name of the proxy (e.g., "caddy-proxy")
+    pub container_name: Option<String>,
+
+    /// Path to config file (for manual updates)
+    pub config_path: Option<String>,
+
+    /// Whether to auto-update proxy config
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+
+    /// Reload command (e.g., "caddy reload")
+    pub reload_command: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SharedResourcesConfig {
+    /// Shared PostgreSQL configuration
+    pub postgres: Option<SharedPostgresConfig>,
+
+    /// Shared Redis configuration
+    pub redis: Option<SharedRedisConfig>,
+
+    /// Other shared services
+    #[serde(default)]
+    pub services: Vec<SharedServiceConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SharedPostgresConfig {
+    /// Container name or host
+    pub host: String,
+
+    /// Port (default: 5432)
+    #[serde(default = "default_postgres_port")]
+    pub port: u16,
+
+    /// Database name for this project
+    pub database: String,
+
+    /// Username
+    pub user: String,
+
+    /// Docker network where postgres is accessible
+    pub network: Option<String>,
+}
+
+fn default_postgres_port() -> u16 {
+    5432
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SharedRedisConfig {
+    /// Container name or host
+    pub host: String,
+
+    /// Port (default: 6379)
+    #[serde(default = "default_redis_port")]
+    pub port: u16,
+
+    /// Redis database number
+    #[serde(default)]
+    pub db: u8,
+
+    /// Docker network where redis is accessible
+    pub network: Option<String>,
+}
+
+fn default_redis_port() -> u16 {
+    6379
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SharedServiceConfig {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -20,6 +135,12 @@ pub struct BuildConfig {
     pub image: String,
     pub cache: Option<Vec<String>>,
     pub steps: Vec<String>,
+
+    /// Docker Compose file to use for building (if using compose strategy)
+    pub compose_file: Option<String>,
+
+    /// Services to build (if using compose with selective builds)
+    pub services: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

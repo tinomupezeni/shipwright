@@ -3,6 +3,7 @@ mod websocket;
 mod db;
 mod webhooks;
 mod pipeline;
+mod infrastructure;
 
 use tracing_subscriber;
 use std::sync::{Arc, Mutex};

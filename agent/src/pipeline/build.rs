@@ -4,26 +4,28 @@ use bollard::image::BuildImageOptions;
 use futures_util::stream::StreamExt;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use tar::Builder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use tokio::sync::broadcast;
 use shipwright_common::protocol::{AgentMessage, BuildEvent};
+use crate::infrastructure::{detect_infrastructure, detector::recommend_deploy_dir};
+use crate::pipeline::deploy::DeploymentContext;
 
 pub async fn run_pipeline(
-    project_name: &str, 
-    repo_url: &str, 
+    project_name: &str,
+    repo_url: &str,
     tx: broadcast::Sender<AgentMessage>
 ) -> Result<()> {
-    info!("Starting pipeline for project: {}", project_name);
+    info!("Starting infrastructure-aware pipeline for project: {}", project_name);
 
     let _ = tx.send(AgentMessage::BuildUpdate {
         project_name: project_name.to_string(),
         event: BuildEvent::Started,
     });
 
-    // 1. Clone
+    // 1. Clone (infrastructure-aware)
     let build_dir = match clone_repo(repo_url, project_name).await {
         Ok(dir) => dir,
         Err(e) => {
@@ -35,8 +37,11 @@ pub async fn run_pipeline(
         }
     };
 
-    // 2. Build
-    if let Err(e) = build_docker_image(project_name, &build_dir, tx.clone()).await {
+    // 2. Load config if exists
+    let config = load_config(&build_dir).await.ok();
+
+    // 3. Build (check if we should use compose or standalone)
+    if let Err(e) = build_project(project_name, &build_dir, tx.clone(), config.as_ref()).await {
         let _ = tx.send(AgentMessage::BuildUpdate {
             project_name: project_name.to_string(),
             event: BuildEvent::Failed(format!("Build failed: {}", e)),
@@ -44,8 +49,11 @@ pub async fn run_pipeline(
         return Err(e);
     }
 
-    // 3. Deploy (Swap containers)
-    if let Err(e) = deploy_container(project_name).await {
+    // 4. Deploy using infrastructure-aware deployment
+    let build_dir_str = build_dir.to_string_lossy().to_string();
+    let deployment = DeploymentContext::new(project_name, &build_dir_str, config.as_ref()).await?;
+
+    if let Err(e) = deployment.deploy(config.as_ref()).await {
         let _ = tx.send(AgentMessage::BuildUpdate {
             project_name: project_name.to_string(),
             event: BuildEvent::Failed(format!("Deploy failed: {}", e)),
@@ -61,11 +69,36 @@ pub async fn run_pipeline(
     Ok(())
 }
 
+/// Clone repository to appropriate location (infrastructure-aware)
 async fn clone_repo(repo_url: &str, project_name: &str) -> Result<PathBuf> {
-    let build_dir = std::env::temp_dir().join("shipwright-builds").join(project_name);
-    
-    if build_dir.exists() {
-        let _ = std::fs::remove_dir_all(&build_dir);
+    // Detect infrastructure to determine best clone location
+    let infrastructure = detect_infrastructure().await?;
+    let deploy_dir = recommend_deploy_dir(&infrastructure, project_name);
+    let build_dir = PathBuf::from(&deploy_dir);
+
+    // Check if directory exists (existing project)
+    if build_dir.exists() && build_dir.join(".git").exists() {
+        info!("📂 Project exists at {}. Pulling latest changes...", deploy_dir);
+
+        let output = Command::new("git")
+            .arg("pull")
+            .arg("--rebase")
+            .current_dir(&build_dir)
+            .output()
+            .await?;
+
+        if output.status.success() {
+            info!("✅ Successfully updated existing project");
+            return Ok(build_dir);
+        } else {
+            warn!("Git pull failed, performing fresh clone");
+            let _ = std::fs::remove_dir_all(&build_dir);
+        }
+    }
+
+    // Create parent directory if needed
+    if let Some(parent) = build_dir.parent() {
+        std::fs::create_dir_all(parent)?;
     }
     std::fs::create_dir_all(&build_dir)?;
 
@@ -141,28 +174,70 @@ async fn build_docker_image(
     Ok(())
 }
 
-async fn deploy_container(project_name: &str) -> Result<()> {
-    let docker = Docker::connect_with_socket_defaults()?;
-    let image_name = format!("{}:latest", project_name);
-    let container_name = format!("shipwright-{}", project_name);
+/// Load Shipwright config from project directory
+async fn load_config(build_dir: &Path) -> Result<shipwright_common::config::Config> {
+    let config_path = build_dir.join(".shipwright.yml");
 
-    info!("Deploying container: {}", container_name);
+    if !config_path.exists() {
+        anyhow::bail!("No .shipwright.yml found in project");
+    }
 
-    // Stop and remove existing container if it exists
-    use bollard::container::{StopContainerOptions, RemoveContainerOptions, Config, CreateContainerOptions, StartContainerOptions};
-    
-    let _ = docker.stop_container(&container_name, Some(StopContainerOptions { t: 10 })).await;
-    let _ = docker.remove_container(&container_name, Some(RemoveContainerOptions { force: true, ..Default::default() })).await;
+    let config_content = tokio::fs::read_to_string(config_path).await?;
+    let config: shipwright_common::config::Config = serde_yaml::from_str(&config_content)?;
 
-    // Create and start new container
-    let config = Config {
-        image: Some(image_name),
-        ..Default::default()
-    };
+    Ok(config)
+}
 
-    docker.create_container(Some(CreateContainerOptions { name: container_name.clone(), ..Default::default() }), config).await?;
-    docker.start_container(&container_name, None::<StartContainerOptions<String>>).await?;
+/// Build project using appropriate method (standalone or compose)
+async fn build_project(
+    project_name: &str,
+    build_dir: &Path,
+    tx: broadcast::Sender<AgentMessage>,
+    config: Option<&shipwright_common::config::Config>,
+) -> Result<()> {
+    // Check if docker-compose file exists
+    let compose_candidates = [
+        "docker-compose.deploy.yml",
+        "docker-compose.vps.yml",
+        "docker-compose.production.yml",
+        "docker-compose.yml",
+    ];
 
-    info!("Successfully deployed {}", container_name);
+    let compose_file = compose_candidates.iter()
+        .find(|&f| build_dir.join(f).exists());
+
+    if let Some(file) = compose_file {
+        info!("📦 Building with docker-compose: {}", file);
+        build_with_compose(build_dir, file, tx.clone()).await?;
+    } else if build_dir.join("Dockerfile").exists() {
+        info!("📦 Building with Dockerfile");
+        build_docker_image(project_name, build_dir, tx.clone()).await?;
+    } else {
+        anyhow::bail!("No Dockerfile or docker-compose.yml found");
+    }
+
+    Ok(())
+}
+
+/// Build using docker-compose
+async fn build_with_compose(
+    build_dir: &Path,
+    compose_file: &str,
+    tx: broadcast::Sender<AgentMessage>,
+) -> Result<()> {
+    let output = Command::new("docker-compose")
+        .arg("-f")
+        .arg(compose_file)
+        .arg("build")
+        .arg("--no-cache")
+        .current_dir(build_dir)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("docker-compose build failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("✅ docker-compose build completed successfully");
     Ok(())
 }

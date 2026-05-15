@@ -1,0 +1,115 @@
+# Example: Multi-Project VPS with Caddy Proxy
+# Use case: VPS hosting multiple applications behind Caddy (like winstontino@159.198.42.231)
+
+version: 1
+
+project:
+  name: savens-blog
+  framework: auto
+
+build:
+  # Use existing docker-compose file
+  compose_file: docker-compose.deploy.yml
+
+  # Optional: Build only specific services
+  services:
+    - backend
+    - frontend
+    - admin
+    - celery-worker
+
+deploy:
+  type: docker-compose
+
+  vps:
+    host: 159.198.42.231
+    user: winstontino
+    ssh_key: ~/.ssh/id_rsa
+
+    # Main domain
+    domain: savens.restksolutions.co.zw
+
+    # Service-specific routing
+    services:
+      - name: savens-frontend
+        domain: savens.restksolutions.co.zw
+        port: 80
+        expose: true
+
+      - name: savens-admin
+        domain: admin.savens.restksolutions.co.zw
+        port: 80
+        expose: true
+
+      - name: savens-backend
+        domain: api.savens.restksolutions.co.zw
+        port: 8000
+        expose: true
+
+      - name: savens-resume
+        domain: resume.savens.restksolutions.co.zw
+        port: 8002
+        expose: true
+
+      - name: savens-notifications
+        domain: notifications.savens.restksolutions.co.zw
+        port: 8003
+        expose: true
+
+    # ACME/Let's Encrypt email for SSL
+    acme_email: info@restksolutions.co.zw
+
+  replicas: 1
+
+  health:
+    http:
+      path: /health/
+      expect: 200
+      timeout: 30s
+
+# Infrastructure configuration
+infrastructure:
+  # Deployment strategy: "standalone", "compose", or "auto"
+  strategy: compose
+
+  # Deploy directory (respects existing structure)
+  deploy_dir: ~/apps/savens-blog
+
+  # Reverse proxy configuration
+  proxy:
+    type: caddy
+    container_name: caddy-proxy
+    auto_update: true  # Automatically update Caddyfile
+    reload_command: "caddy reload --config /etc/caddy/Caddyfile"
+
+  # Docker networks to join
+  networks:
+    - proxy-tier  # For Caddy routing
+    - core_shared-internal  # For shared resources
+    - savens-network  # Project-specific network
+
+  # Shared resources configuration
+  shared_resources:
+    postgres:
+      host: shared-postgres
+      port: 5432
+      database: savens_blog
+      user: savens
+      network: core_shared-internal
+
+    redis:
+      host: shared-redis
+      port: 6379
+      db: 0
+      network: core_shared-internal
+
+  # Auto-detect existing infrastructure
+  auto_detect: true
+
+# Notifications (optional)
+notifications:
+  slack:
+    webhook: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+    on:
+      - failure
+      - success

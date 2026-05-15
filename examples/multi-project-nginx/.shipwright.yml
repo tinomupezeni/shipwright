@@ -1,0 +1,67 @@
+# Example: Multi-Project VPS with Nginx Proxy
+# Use case: VPS with multiple apps behind Nginx reverse proxy
+
+version: 1
+
+project:
+  name: myapp
+  framework: django
+
+build:
+  compose_file: docker-compose.production.yml
+
+deploy:
+  type: docker-compose
+
+  vps:
+    host: 192.168.1.100
+    user: deployer
+    ssh_key: ~/.ssh/deploy_key
+
+    services:
+      - name: myapp-web
+        domain: myapp.example.com
+        port: 8000
+        expose: true
+
+      - name: myapp-api
+        domain: api.myapp.example.com
+        port: 8001
+        expose: true
+        path: /api  # Path-based routing
+
+infrastructure:
+  strategy: compose
+  deploy_dir: ~/apps/myapp
+
+  proxy:
+    type: nginx
+    container_name: nginx-proxy
+    config_path: /etc/nginx/conf.d
+    auto_update: true
+    reload_command: "nginx -s reload"
+
+  networks:
+    - nginx-network
+    - backend-network
+
+  shared_resources:
+    postgres:
+      host: postgres-db
+      port: 5432
+      database: myapp
+      user: myapp_user
+      network: backend-network
+
+    redis:
+      host: redis-cache
+      port: 6379
+      db: 0
+      network: backend-network
+
+    # Custom shared service
+    services:
+      - name: rabbitmq
+        host: rabbitmq-server
+        port: 5672
+        network: backend-network
