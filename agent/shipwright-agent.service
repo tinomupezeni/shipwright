@@ -1,0 +1,14 @@
+[Unit]
+Description=Shipwright Agent Daemon
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/local/bin
+ExecStart=/usr/local/bin/shipwright-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

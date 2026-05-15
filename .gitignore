@@ -1,0 +1,7 @@
+/target
+/.shipwright/context.tar.gz
+/.shipwright/shipwright.db
+/shipwright-agent.db
+.env
+*.exe
+*.pdb

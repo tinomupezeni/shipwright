@@ -1,0 +1,45 @@
+name: Shipwright Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build Shipwright
+        run: cargo build --release
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Setup Registry Token
+        run: |
+          echo "${{ secrets.REGISTRY_TOKEN }}" > .shipwright/ghcr-token
+          mkdir -p .shipwright
+
+      - name: Run Shipwright Deploy
+        run: ./target/release/shipwright-cli up
+        env:
+          SHIPWRIGHT_VPS_HOST: ${{ secrets.VPS_HOST }}
+          SHIPWRIGHT_REGISTRY_URL: ${{ secrets.REGISTRY_URL }}

@@ -1,0 +1,26 @@
+[package]
+name = "shipwright-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shipwright-common = { path = "../common" }
+tokio = { version = "1", features = ["full"] }
+bollard = "0.16"
+sysinfo = "0.30"
+tokio-tungstenite = "0.21"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+thiserror = "1.0"
+futures-util = "0.3"
+axum = "0.7"
+rusqlite = { version = "0.31", features = ["bundled"] }
+refinery = { version = "0.8", features = ["rusqlite"] }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+tar = "0.4"
+flate2 = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
