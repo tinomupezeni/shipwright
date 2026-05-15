@@ -69,12 +69,25 @@ pub async fn run_pipeline(
     Ok(())
 }
 
+/// Convert HTTPS GitHub URL to SSH URL for authentication
+fn convert_to_ssh_url(url: &str) -> String {
+    // Convert https://github.com/user/repo.git to git@github.com:user/repo.git
+    if url.starts_with("https://github.com/") {
+        url.replace("https://github.com/", "git@github.com:")
+    } else {
+        url.to_string()
+    }
+}
+
 /// Clone repository to appropriate location (infrastructure-aware)
 async fn clone_repo(repo_url: &str, project_name: &str) -> Result<PathBuf> {
     // Detect infrastructure to determine best clone location
     let infrastructure = detect_infrastructure().await?;
     let deploy_dir = recommend_deploy_dir(&infrastructure, project_name);
     let build_dir = PathBuf::from(&deploy_dir);
+
+    // Convert HTTPS URLs to SSH for private repo support
+    let clone_url = convert_to_ssh_url(repo_url);
 
     // Check if directory exists (existing project)
     if build_dir.exists() && build_dir.join(".git").exists() {
@@ -102,13 +115,13 @@ async fn clone_repo(repo_url: &str, project_name: &str) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(&build_dir)?;
 
-    info!("Cloning {} into {:?}", repo_url, build_dir);
-    
+    info!("Cloning {} into {:?}", clone_url, build_dir);
+
     let output = Command::new("git")
         .arg("clone")
         .arg("--depth")
         .arg("1")
-        .arg(repo_url)
+        .arg(&clone_url)
         .arg(".")
         .current_dir(&build_dir)
         .output()
