@@ -212,12 +212,28 @@ async fn build_project(
     tx: broadcast::Sender<AgentMessage>,
     config: Option<&shipwright_common::config::Config>,
 ) -> Result<()> {
-    // Check if docker-compose file exists
+    // First check if config specifies a compose file
+    if let Some(cfg) = config {
+        if let Some(compose_file) = &cfg.build.compose_file {
+            let compose_path = build_dir.join(compose_file);
+            if compose_path.exists() {
+                info!("📦 Building with configured docker-compose: {}", compose_file);
+                build_with_compose(build_dir, compose_file, tx.clone()).await?;
+                return Ok(());
+            } else {
+                warn!("Configured compose file {} not found, falling back to auto-detection", compose_file);
+            }
+        }
+    }
+
+    // Fallback: auto-detect compose file
     let compose_candidates = [
         "docker-compose.deploy.yml",
         "docker-compose.vps.yml",
         "docker-compose.production.yml",
         "docker-compose.yml",
+        "infra/docker-compose.deploy.yml",
+        "infra/docker-compose.yml",
     ];
 
     let compose_file = compose_candidates.iter()

@@ -268,6 +268,17 @@ pub fn recommend_strategy(info: &InfrastructureInfo) -> String {
 
 /// Get recommended deployment directory
 pub fn recommend_deploy_dir(info: &InfrastructureInfo, project_name: &str) -> String {
+    // First check if project already exists with a config file
+    for base_dir in &info.deploy_directories {
+        let potential_dir = format!("{}/{}", base_dir, project_name);
+        let config_path = format!("{}/.shipwright.yml", potential_dir);
+        if std::path::Path::new(&config_path).exists() {
+            debug!("Found existing project with config at: {}", potential_dir);
+            return potential_dir;
+        }
+    }
+
+    // Otherwise use first available directory
     if let Some(base_dir) = info.deploy_directories.first() {
         format!("{}/{}", base_dir, project_name)
     } else {
