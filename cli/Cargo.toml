@@ -3,6 +3,10 @@ name = "shipwright-cli"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "shipwright"
+path = "src/main.rs"
+
 [dependencies]
 shipwright-common = { path = "../common" }
 clap = { version = "4.0", features = ["derive"] }
