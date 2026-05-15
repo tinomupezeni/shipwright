@@ -59,8 +59,35 @@ fn open_firewall_port(port: u16) {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    
-    info!("🚢 Shipwright Agent v0.1.1 starting...");
+
+    info!("🚢 Shipwright Agent v0.1.2 starting...");
+
+    // Detect infrastructure on startup
+    info!("🔍 Detecting infrastructure...");
+    match infrastructure::detect_infrastructure().await {
+        Ok(infra_info) => {
+            if let Some((proxy_type, container_name)) = &infra_info.proxy {
+                info!("   ✓ Detected {} proxy: {}", proxy_type, container_name);
+            }
+            info!("   ✓ Found {} Docker networks", infra_info.networks.len());
+            if infra_info.shared_resources.postgres.is_some() {
+                info!("   ✓ Found shared PostgreSQL");
+            }
+            if infra_info.shared_resources.redis.is_some() {
+                info!("   ✓ Found shared Redis");
+            }
+            if infra_info.is_multi_project {
+                info!("   ✓ Multi-project setup detected");
+            }
+
+            let strategy = infrastructure::detector::recommend_strategy(&infra_info);
+            info!("   ✓ Recommended deployment strategy: {}", strategy);
+        }
+        Err(e) => {
+            error!("   ✗ Infrastructure detection failed: {}", e);
+        }
+    }
+
     info!("Initializing Shipwright Agent DB...");
     let conn = db::init_db()?;
     let conn = Arc::new(Mutex::new(conn));
