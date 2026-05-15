@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use std::fs;
 use std::path::Path;
-use dialoguer::{Input, Select, theme::ColorfulTheme};
+use std::process::Command;
+use dialoguer::{Input, Select, theme::ColorfulTheme, Confirm};
 
 pub async fn run() -> Result<()> {
     let config_path = Path::new(".shipwright.yml");
@@ -13,46 +14,79 @@ pub async fn run() -> Result<()> {
 
     println!("🚀 Welcome to Shipwright! Let's set up your project.");
 
+    // 1. Auto-detect Project Name from Git or Folder
     let current_dir = std::env::current_dir()?;
-    let default_name = current_dir
+    let folder_name = current_dir
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("myapp");
 
+    let git_remote = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output();
+
+    let mut detected_name = folder_name.to_string();
+    if let Ok(output) = git_remote {
+        let url = String::from_utf8_lossy(&output.stdout);
+        if let Some(repo_name) = url.trim().split('/').last() {
+            detected_name = repo_name.replace(".git", "");
+        }
+    }
+
     let project_name: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Project name")
-        .default(default_name.into())
+        .default(detected_name)
         .interact_text()?;
     
-    // Normalize for Docker
     let project_name = project_name.to_lowercase().replace(" ", "-");
 
-    let registry_options = vec!["GitHub Container Registry (GHCR)", "Docker Hub", "Custom Registry"];
-    let registry_type = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Choose your container registry")
-        .items(&registry_options)
+    // 2. Deployment Strategy (Mini-PaaS is now the default)
+    let strategy_options = vec!["Mini-PaaS (Build & Deploy on VPS - Easiest)", "Traditional (Push image to Registry)"];
+    let strategy_selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("How would you like to deploy?")
+        .items(&strategy_options)
         .default(0)
         .interact()?;
 
-    let registry_user: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Registry Username (e.g., your Docker Hub or GitHub user)")
-        .interact_text()?;
+    let (registry_url, registry_user, registry_token) = if strategy_selection == 1 {
+        // Traditional Flow
+        let registry_options = vec!["GitHub Container Registry (GHCR)", "Docker Hub", "Custom Registry"];
+        let registry_type = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Choose your container registry")
+            .items(&registry_options)
+            .default(0)
+            .interact()?;
 
-    let registry_url = match registry_type {
-        0 => format!("ghcr.io/{}", registry_user),
-        1 => format!("docker.io/{}", registry_user),
-        _ => Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Registry URL")
-            .interact_text()?,
+        let registry_user: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Registry Username")
+            .interact_text()?;
+
+        let registry_url = match registry_type {
+            0 => format!("ghcr.io/{}", registry_user),
+            1 => format!("docker.io/{}", registry_user),
+            _ => Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Registry URL")
+                .interact_text()?,
+        };
+
+        let registry_token: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Enter your Registry Token/Password")
+            .interact_text()?;
+
+        (Some(registry_url), Some(registry_user), Some(registry_token))
+    } else {
+        // Mini-PaaS Flow: No registry needed
+        (None, None, None)
     };
 
+    // 3. VPS Configuration
     let vps_host: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("VPS IP Address or Hostname")
+        .with_prompt("VPS IP Address")
         .interact_text()?;
 
     let vps_user: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("VPS SSH User")
-        .default("root".into())
+        .default("winstontino".into())
         .interact_text()?;
 
     // SSH Key Detection
@@ -63,7 +97,6 @@ pub async fn run() -> Result<()> {
             let path = entry.path();
             if path.is_file() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                // Common private key patterns
                 if name.starts_with("id_") && !name.ends_with(".pub") {
                     ssh_keys.push(name.to_string());
                 }
@@ -96,17 +129,15 @@ pub async fn run() -> Result<()> {
     };
 
     let domain: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Domain name (optional, e.g., example.com)")
+        .with_prompt("Domain name (optional)")
         .allow_empty(true)
         .interact_text()?;
 
-    let registry_token: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter your Registry Token/Password (for pushing images)")
-        .interact_text()?;
-
-    // Automated folder and token creation
+    // 4. Persistence
     fs::create_dir_all(".shipwright")?;
-    fs::write(".shipwright/token", &registry_token)?;
+    if let Some(token) = registry_token {
+        fs::write(".shipwright/token", &token)?;
+    }
 
     // Automated .gitignore update
     if Path::new(".gitignore").exists() {
@@ -118,9 +149,7 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    let has_compose = Path::new("docker-compose.yml").exists() || Path::new("docker-compose.yaml").exists();
     let has_dockerfile = Path::new("Dockerfile").exists();
-
     let build_config = if has_dockerfile {
         r#"build:
   image: auto-detected
@@ -133,34 +162,14 @@ pub async fn run() -> Result<()> {
     - echo "Building...""#
     };
 
-    let deploy_config = if has_compose {
-        format!(r#"deploy:
-  type: docker-compose
-  registry:
-    url: {registry_url}
+    let registry_section = if let (Some(url), Some(user)) = (registry_url, registry_user) {
+        format!(r#"  registry:
+    url: {url}
     auth:
-      username: {registry_user}
-      token_file: .shipwright/token
-  vps:
-    host: {vps_host}
-    user: {vps_user}
-    ssh_key: {vps_key}
-    domain: {domain}
-  replicas: 1"#)
+      username: {user}
+      token_file: .shipwright/token"#)
     } else {
-        format!(r#"deploy:
-  type: docker
-  registry:
-    url: {registry_url}
-    auth:
-      username: {registry_user}
-      token_file: .shipwright/token
-  vps:
-    host: {vps_host}
-    user: {vps_user}
-    ssh_key: {vps_key}
-    domain: {domain}
-  replicas: 1"#)
+        "  # Built locally on VPS (Mini-PaaS mode)".to_string()
     };
 
     let config = format!(r#"version: 1
@@ -171,7 +180,15 @@ project:
 
 {build_config}
 
-{deploy_config}
+deploy:
+  type: docker
+{registry_section}
+  vps:
+    host: {vps_host}
+    user: {vps_user}
+    ssh_key: {vps_key}
+    domain: {domain}
+  replicas: 1
   
   health:
     http:
@@ -184,9 +201,9 @@ project:
     println!("\n✅ Created .shipwright.yml with your settings.");
     
     println!("\n🚀 Next steps:");
-    println!("  1. 🛠️  Run 'shipwright-cli setup' to prepare your VPS (installs Docker/Caddy).");
-    println!("  2. 🚢 Run 'shipwright-cli up' to build and deploy your project!");
-    println!("\n💡 Tip: Check .shipwright.yml to refine your build steps or health checks.");
+    println!("  1. 🛠️  Run 'shipwright setup' to prepare your VPS (if not done).");
+    println!("  2. 🔗 Run 'shipwright register' to link this project to your VPS & GitHub.");
+    println!("  3. 🚢 Push your code and run 'shipwright watch' to see it go live!");
 
     Ok(())
 }
