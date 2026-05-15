@@ -94,15 +94,14 @@ async fn register_project(
     
     let db = state.db.lock().unwrap();
     let res = db.execute(
-        "INSERT OR REPLACE INTO projects (id, name, repo_url, webhook_secret, created_at) 
-         VALUES (
-            COALESCE((SELECT id FROM projects WHERE name = ?1), ?2),
-            ?1, ?3, ?4, 
-            COALESCE((SELECT created_at FROM projects WHERE name = ?1), ?5)
-         )",
+        "INSERT INTO projects (id, name, repo_url, webhook_secret, created_at) 
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(name) DO UPDATE SET
+            repo_url = excluded.repo_url,
+            webhook_secret = excluded.webhook_secret",
         (
-            &payload.name,
             uuid::Uuid::new_v4().to_string(),
+            &payload.name,
             &payload.repo_url,
             &payload.webhook_secret,
             chrono::Utc::now().timestamp(),

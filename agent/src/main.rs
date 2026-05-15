@@ -59,6 +59,7 @@ fn open_firewall_port(port: u16) {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     
+    info!("🚢 Shipwright Agent v0.1.1 starting...");
     info!("Initializing Shipwright Agent DB...");
     let conn = db::init_db()?;
     let conn = Arc::new(Mutex::new(conn));
