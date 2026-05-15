@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let (tx, _rx) = broadcast::channel::<AgentMessage>(100);
 
     let ws_addr = "0.0.0.0:8081";
-    let http_addr = "0.0.0.0:8082";
+    let http_addr = "0.0.0.0:8083";
 
     info!("Starting Shipwright Agent...");
 

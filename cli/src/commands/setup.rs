@@ -125,7 +125,7 @@ WantedBy=multi-user.target
     execute_remote_command(vps, "sudo systemctl restart shipwright-agent")?;
 
     // Open webhook port
-    execute_remote_command(vps, "sudo ufw allow 8082/tcp")?;
+    execute_remote_command(vps, "sudo ufw allow 8083/tcp")?;
 
     println!("\n✅ Shipwright Agent is now running as a global daemon.");
     println!("✨ VPS Setup Complete! Your server is now ready for 'shipwright register'.");

@@ -38,7 +38,7 @@ pub async fn run() -> Result<()> {
     let webhook_secret = uuid::Uuid::new_v4().to_string();
     
     // Use the registration endpoint on the agent
-    let agent_url = format!("http://{}:8082/projects", vps.host);
+    let agent_url = format!("http://{}:8083/projects", vps.host);
     let res = client.post(&agent_url)
         .json(&json!({
             "name": repo,
@@ -63,7 +63,7 @@ pub async fn run() -> Result<()> {
         .personal_token(github_token)
         .build()?;
 
-    let webhook_url = format!("http://{}:8082/webhooks/github", vps.host);
+    let webhook_url = format!("http://{}:8083/webhooks/github", vps.host);
     
     let route = format!("/repos/{owner}/{repo}/hooks");
     let payload = json!({
