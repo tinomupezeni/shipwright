@@ -90,15 +90,19 @@ async fn register_project(
     State(state): State<AppState>,
     Json(payload): Json<ProjectRegistration>
 ) -> impl IntoResponse {
-    info!("Registering new project: {}", payload.name);
+    info!("Registering or updating project: {}", payload.name);
     
     let db = state.db.lock().unwrap();
     let res = db.execute(
-        "INSERT INTO projects (id, name, repo_url, webhook_secret, created_at) 
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR REPLACE INTO projects (id, name, repo_url, webhook_secret, created_at) 
+         VALUES (
+            COALESCE((SELECT id FROM projects WHERE name = ?1), ?2),
+            ?1, ?3, ?4, 
+            COALESCE((SELECT created_at FROM projects WHERE name = ?1), ?5)
+         )",
         (
-            uuid::Uuid::new_v4().to_string(),
             &payload.name,
+            uuid::Uuid::new_v4().to_string(),
             &payload.repo_url,
             &payload.webhook_secret,
             chrono::Utc::now().timestamp(),
