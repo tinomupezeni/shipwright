@@ -287,13 +287,15 @@ fn add_directory_to_tar<W: Write>(
 
 fn get_registry_credentials(config: &Config, registry_url: &str) -> Result<DockerCredentials> {
     // Try to get from config first
-    if let Some(auth) = &config.deploy.registry.auth {
-        if let Ok(token) = fs::read_to_string(&auth.token_file) {
-            return Ok(DockerCredentials {
-                username: Some(auth.username.clone()),
-                password: Some(token.trim().to_string()),
-                ..Default::default()
-            });
+    if let Some(registry) = &config.deploy.registry {
+        if let Some(auth) = &registry.auth {
+            if let Ok(token) = fs::read_to_string(&auth.token_file) {
+                return Ok(DockerCredentials {
+                    username: Some(auth.username.clone()),
+                    password: Some(token.trim().to_string()),
+                    ..Default::default()
+                });
+            }
         }
     }
 

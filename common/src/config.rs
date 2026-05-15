@@ -26,7 +26,7 @@ pub struct BuildConfig {
 pub struct DeployConfig {
     #[serde(rename = "type")]
     pub deploy_type: String,
-    pub registry: RegistryConfig,
+    pub registry: Option<RegistryConfig>,
     pub vps: Option<VpsConfig>,
     pub replicas: u32,
     pub health: Option<HealthConfig>,

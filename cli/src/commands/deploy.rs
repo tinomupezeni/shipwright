@@ -25,7 +25,9 @@ pub async fn run(dry_run: bool) -> Result<()> {
         }
     }
     if let Ok(url) = std::env::var("SHIPWRIGHT_REGISTRY_URL") {
-        config.deploy.registry.url = url;
+        if let Some(registry) = &mut config.deploy.registry {
+            registry.url = url;
+        }
     }
 
     println!("Project: {}", config.project.name);
@@ -33,7 +35,9 @@ pub async fn run(dry_run: bool) -> Result<()> {
     if dry_run {
         println!("Performing dry run for {}...", config.project.name);
         println!("Deploy type: {}", config.deploy.deploy_type);
-        println!("Deploying to: {}", config.deploy.registry.url);
+        if let Some(registry) = &config.deploy.registry {
+            println!("Deploying to: {}", registry.url);
+        }
         
         if config.deploy.deploy_type == "docker-compose" {
             // Find the compose file to check for buildable services
@@ -90,7 +94,8 @@ pub async fn run(dry_run: bool) -> Result<()> {
                 let services = discover_services(&file)?;
                 if !services.is_empty() {
                     println!("Found {} buildable services. Proceeding with multi-service build...", services.len());
-                    build_and_push_services(&config, &file, &config.deploy.registry.url).await?;
+                    let registry_url = config.deploy.registry.as_ref().map(|r| r.url.as_str()).unwrap_or("local");
+                    build_and_push_services(&config, &file, registry_url).await?;
                 }
             }
         } else {

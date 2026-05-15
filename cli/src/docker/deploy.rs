@@ -81,60 +81,66 @@ pub async fn deploy_image(config: &Config) -> Result<()> {
     let docker = Docker::connect_with_socket_defaults()?;
 
     let local_image = format!("{}:latest", config.project.name);
-    let remote_image = format!("{}/{}:latest", config.deploy.registry.url, config.project.name);
+    
+    if let Some(registry) = &config.deploy.registry {
+        let remote_image = format!("{}/{}:latest", registry.url, config.project.name);
 
-    info!("Tagging image {} as {}", local_image, remote_image);
+        info!("Tagging image {} as {}", local_image, remote_image);
 
-    docker.tag_image(&local_image, Some(TagImageOptions {
-        repo: remote_image.as_str(),
-        tag: "latest",
-    })).await.context("Failed to tag image")?;
+        docker.tag_image(&local_image, Some(TagImageOptions {
+            repo: remote_image.as_str(),
+            tag: "latest",
+        })).await.context("Failed to tag image")?;
 
-    info!("Pushing image to {}", remote_image);
+        info!("Pushing image to {}", remote_image);
 
-    let auth_config = if let Some(auth) = &config.deploy.registry.auth {
-        let token = fs::read_to_string(&auth.token_file)
-            .context(format!("Failed to read token from {}", auth.token_file))?
-            .trim()
-            .to_string();
+        let auth_config = if let Some(auth) = &registry.auth {
+            let token = fs::read_to_string(&auth.token_file)
+                .context(format!("Failed to read token from {}", auth.token_file))?
+                .trim()
+                .to_string();
 
-        Some(DockerCredentials {
-            username: Some(auth.username.clone()),
-            password: Some(token),
-            ..Default::default()
-        })
-    } else {
-        None
-    };
+            Some(DockerCredentials {
+                username: Some(auth.username.clone()),
+                password: Some(token),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
 
-    let mut push_stream = docker.push_image(
-        &remote_image,
-        Some(PushImageOptions::<String> {
-            ..Default::default()
-        }),
-        auth_config,
-    );
+        let mut push_stream = docker.push_image(
+            &remote_image,
+            Some(PushImageOptions::<String> {
+                ..Default::default()
+            }),
+            auth_config,
+        );
 
-    while let Some(msg) = push_stream.next().await {
-        let msg = msg?;
-        if let Some(status) = msg.status {
-            println!("{}", status);
-        }
-        if let Some(error) = msg.error {
-            anyhow::bail!("Push error: {}", error);
-        }
-    }
-
-    info!("Successfully pushed {}", remote_image);
-
-    if let Some(vps) = &config.deploy.vps {
-        deploy_to_vps(vps, &remote_image, &config.project.name).context("Failed to deploy to VPS")?;
-
-        if let Some(domain) = &vps.domain {
-            if !domain.is_empty() {
-                setup_caddy_proxy(vps, domain, 8080).context("Failed to setup Caddy proxy")?;
+        while let Some(msg) = push_stream.next().await {
+            let msg = msg?;
+            if let Some(status) = msg.status {
+                println!("{}", status);
+            }
+            if let Some(error) = msg.error {
+                anyhow::bail!("Push error: {}", error);
             }
         }
+
+        info!("Successfully pushed {}", remote_image);
+
+        if let Some(vps) = &config.deploy.vps {
+            deploy_to_vps(vps, &remote_image, &config.project.name).context("Failed to deploy to VPS")?;
+
+            if let Some(domain) = &vps.domain {
+                if !domain.is_empty() {
+                    setup_caddy_proxy(vps, domain, 8080).context("Failed to setup Caddy proxy")?;
+                }
+            }
+        }
+    } else {
+        // Mini-PaaS mode - if no registry, we assume the agent handles the build from git
+        println!("🚀 Mini-PaaS mode: Agent will handle building and deployment from GitHub pushes.");
     }
 
     Ok(())
