@@ -54,25 +54,39 @@ fi
 
 echo -e "${GREEN}✓ Docker found${NC}"
 
-# Create installation directory
-INSTALL_DIR="/opt/shipwright"
-mkdir -p "$INSTALL_DIR"
-
-echo "📂 Installation directory: $INSTALL_DIR"
-
-# Clone or update repository
-if [ -d "$INSTALL_DIR/repo" ]; then
-    echo "📦 Updating Shipwright repository..."
-    cd "$INSTALL_DIR/repo"
-    git pull origin main
+# Determine user home directory
+if [ -n "$SUDO_USER" ]; then
+    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 else
-    echo "📦 Cloning Shipwright repository..."
-    git clone https://github.com/tinomupezeni/shipwright.git "$INSTALL_DIR/repo"
-    cd "$INSTALL_DIR/repo"
+    USER_HOME="$HOME"
 fi
 
-# Build the agent binary (as the user who has Rust installed)
+REPO_DIR="$USER_HOME/.shipwright/repo"
+
+echo "📂 Repository directory: $REPO_DIR"
+
+# Clone or update repository (as the user)
+if [ -d "$REPO_DIR" ]; then
+    echo "📦 Updating Shipwright repository..."
+    if [ -n "$SUDO_USER" ]; then
+        sudo -u $SUDO_USER git -C "$REPO_DIR" pull origin main
+    else
+        git -C "$REPO_DIR" pull origin main
+    fi
+else
+    echo "📦 Cloning Shipwright repository..."
+    if [ -n "$SUDO_USER" ]; then
+        sudo -u $SUDO_USER mkdir -p "$USER_HOME/.shipwright"
+        sudo -u $SUDO_USER git clone https://github.com/tinomupezeni/shipwright.git "$REPO_DIR"
+    else
+        mkdir -p "$USER_HOME/.shipwright"
+        git clone https://github.com/tinomupezeni/shipwright.git "$REPO_DIR"
+    fi
+fi
+
+# Build the agent binary (as the user who has Rust installed, in their own directory)
 echo "🔨 Building Shipwright agent binary..."
+cd "$REPO_DIR"
 $CARGO_CMD build --release --package shipwright-agent
 
 if [ ! -f "target/release/shipwright-agent" ]; then
@@ -84,7 +98,7 @@ echo -e "${GREEN}✓ Binary built successfully${NC}"
 
 # Install binary
 echo "📦 Installing agent binary..."
-cp target/release/shipwright-agent /usr/local/bin/
+cp "$REPO_DIR/target/release/shipwright-agent" /usr/local/bin/
 chmod +x /usr/local/bin/shipwright-agent
 
 # Create required directories
@@ -97,11 +111,12 @@ fi
 
 # Install systemd service
 echo "⚙️  Installing systemd service..."
-cp scripts/shipwright-agent.service /etc/systemd/system/
+cp "$REPO_DIR/scripts/shipwright-agent.service" /etc/systemd/system/
 
-# Update service file with actual user if running via sudo
+# Update service file with actual paths (replace %u placeholder with actual username)
 if [ -n "$SUDO_USER" ]; then
-    sed -i "s|SHIPWRIGHT_DEPLOY_DIR=/home/%u/apps|SHIPWRIGHT_DEPLOY_DIR=/home/$SUDO_USER/apps|g" /etc/systemd/system/shipwright-agent.service
+    sed -i "s|/home/%u/apps|/home/$SUDO_USER/apps|g" /etc/systemd/system/shipwright-agent.service
+    sed -i "s|/home/%u/.shipwright/repo|$REPO_DIR|g" /etc/systemd/system/shipwright-agent.service
 fi
 
 systemctl daemon-reload

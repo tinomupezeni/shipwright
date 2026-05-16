@@ -322,8 +322,9 @@ async fn handle_self_update_webhook(
 async fn perform_systemd_self_update() -> anyhow::Result<()> {
     use tokio::process::Command;
 
+    // SHIPWRIGHT_REPO_PATH is set by systemd service to user's home directory
     let repo_path = std::env::var("SHIPWRIGHT_REPO_PATH")
-        .unwrap_or_else(|_| "/opt/shipwright/repo".to_string());
+        .expect("SHIPWRIGHT_REPO_PATH must be set in systemd service");
 
     info!("Step 1: Pulling latest code from GitHub...");
 
@@ -349,10 +350,12 @@ async fn perform_systemd_self_update() -> anyhow::Result<()> {
         anyhow::bail!("Failed to build binary: {}", String::from_utf8_lossy(&output.stderr));
     }
 
-    info!("Step 3: Installing updated binary...");
+    info!("Step 3: Installing updated binary (requires root)...");
 
-    let output = Command::new("cp")
+    // Copy binary to system location (service runs as root, so this should work)
+    let output = Command::new("install")
         .args([
+            "-m", "755",
             &format!("{}/target/release/shipwright-agent", repo_path),
             "/usr/local/bin/shipwright-agent"
         ])
