@@ -25,6 +25,9 @@ Traditional deployment tools either:
 - ✅ Supports both standalone and docker-compose deployments
 - ✅ Runs comprehensive smoke tests after deployment
 - ✅ Provides real-time deployment feedback via WebSocket
+- ✅ **Automatic deployments via GitHub webhooks** (push to deploy!)
+- ✅ Secure webhook signature verification (HMAC-SHA256)
+- ✅ Branch-specific deployments (only deploys configured branch)
 
 ## Installation
 
@@ -217,22 +220,30 @@ infrastructure:
       network: shared-internal
 ```
 
-### 4. Deploy
+### 4. Register & Deploy
 
 ```bash
-# Register your project with the agent
-shipwright register \
-  --name myapp \
-  --repo https://github.com/yourusername/myapp.git \
-  --vps your-server.com \
-  --user deploy
+# In your project directory, run register to set up automatic deployments
+shipwright register
 
-# Deploy
-shipwright deploy myapp
+# This will:
+# - Register your project with the agent
+# - Create a GitHub webhook for automatic deployments
+# - Configure deployments to trigger on push to your current branch
 
-# Watch deployment progress
-shipwright logs myapp --follow
+# Watch live deployment progress
+shipwright watch
+
+# From now on, just push your code - deployments happen automatically!
+git push origin main
 ```
+
+**That's it!** Every time you push to your configured branch, Shipwright automatically:
+- Pulls the latest code on your VPS
+- Builds your Docker containers
+- Runs comprehensive smoke tests
+- Deploys if all tests pass
+- Sends you real-time updates via WebSocket
 
 ## Features
 
@@ -296,12 +307,35 @@ Comprehensive automated validation that catches deployment issues before they ca
 
 See [docs/SMOKE_TESTING.md](docs/SMOKE_TESTING.md) for full documentation.
 
+### 🔄 Automatic Deployments via GitHub Webhooks
+
+Shipwright integrates directly with GitHub to automatically deploy on every push:
+
+**How it works:**
+1. Run `shipwright register` in your project (one time setup)
+2. Shipwright creates a GitHub webhook with secure signature verification
+3. Every push to your configured branch triggers automatic deployment
+4. Agent pulls code, builds, runs smoke tests, and deploys
+5. You get real-time updates via WebSocket
+
+**Security:**
+- HMAC-SHA256 webhook signature verification
+- Only registered projects can deploy
+- Branch filtering (only configured branch triggers deployment)
+- Webhook secrets stored securely
+
+**Branch Configuration:**
+- Defaults to your current branch when running `shipwright register`
+- Only pushes to this branch trigger deployments
+- Ignores pushes to other branches (e.g., dev, feature branches)
+
 ### 📊 Real-time Monitoring
 
 - WebSocket-based live updates
 - Deployment progress tracking
 - Build logs streaming
 - Container status monitoring
+- Watch active deployments with `shipwright watch`
 
 ## Architecture
 

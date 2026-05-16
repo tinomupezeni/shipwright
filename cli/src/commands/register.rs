@@ -57,17 +57,27 @@ pub async fn run() -> Result<()> {
 
     println!("Registering {} ({}/{}) with Shipwright Agent on {}...", repo, owner, repo, vps.host);
 
+    // Get current branch to use as deploy branch
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()?;
+    let current_branch = String::from_utf8(branch_output.stdout)?.trim().to_string();
+    let deploy_branch = if current_branch.is_empty() { "main".to_string() } else { current_branch };
+
+    println!("📌 Deploy branch: {}", deploy_branch);
+
     // 3. Register with Agent
     let client = reqwest::Client::new();
     let webhook_secret = uuid::Uuid::new_v4().to_string();
-    
+
     // Use the registration endpoint on the discovered port
     let agent_url = format!("http://{}:{}/projects", vps.host, http_port);
     let res = client.post(&agent_url)
         .json(&json!({
             "name": repo,
             "repo_url": repo_url,
-            "webhook_secret": webhook_secret
+            "webhook_secret": webhook_secret,
+            "deploy_branch": deploy_branch
         }))
         .send()
         .await?;
@@ -133,8 +143,9 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    println!("\n🚀 Done! Shipwright will now automatically build and deploy every time you push to GitHub.");
-    println!("💡 You can view logs by running 'shipwright logs' or the upcoming 'shipwright watch' command.");
+    println!("\n🚀 Done! Shipwright will automatically deploy when you push to the '{}' branch.", deploy_branch);
+    println!("💡 View deployment logs with 'shipwright watch'");
+    println!("🔒 Webhook secured with signature verification");
 
     Ok(())
 }
