@@ -28,8 +28,13 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# Check if Rust/Cargo is installed
-if ! command -v cargo &> /dev/null; then
+# Check if Rust/Cargo is installed (check both root and user paths)
+CARGO_CMD=""
+if command -v cargo &> /dev/null; then
+    CARGO_CMD="cargo"
+elif [ -n "$SUDO_USER" ] && sudo -u $SUDO_USER bash -c 'command -v cargo' &> /dev/null; then
+    CARGO_CMD="sudo -u $SUDO_USER cargo"
+else
     echo -e "${RED}✗ Cargo not found${NC}"
     echo "Shipwright agent requires Rust to build."
     echo "Install Rust from: https://rustup.rs"
@@ -66,9 +71,9 @@ else
     cd "$INSTALL_DIR/repo"
 fi
 
-# Build the agent binary
+# Build the agent binary (as the user who has Rust installed)
 echo "🔨 Building Shipwright agent binary..."
-cargo build --release --package shipwright-agent
+$CARGO_CMD build --release --package shipwright-agent
 
 if [ ! -f "target/release/shipwright-agent" ]; then
     echo -e "${RED}✗ Build failed - binary not found${NC}"
@@ -85,11 +90,20 @@ chmod +x /usr/local/bin/shipwright-agent
 # Create required directories
 mkdir -p /var/lib/shipwright
 mkdir -p /etc/shipwright
-mkdir -p /home/$SUDO_USER/apps
+if [ -n "$SUDO_USER" ]; then
+    mkdir -p /home/$SUDO_USER/apps
+    chown -R $SUDO_USER:$SUDO_USER /home/$SUDO_USER/apps
+fi
 
 # Install systemd service
 echo "⚙️  Installing systemd service..."
 cp scripts/shipwright-agent.service /etc/systemd/system/
+
+# Update service file with actual user if running via sudo
+if [ -n "$SUDO_USER" ]; then
+    sed -i "s|SHIPWRIGHT_DEPLOY_DIR=/home/%u/apps|SHIPWRIGHT_DEPLOY_DIR=/home/$SUDO_USER/apps|g" /etc/systemd/system/shipwright-agent.service
+fi
+
 systemctl daemon-reload
 
 # Stop existing service if running

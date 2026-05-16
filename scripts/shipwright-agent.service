@@ -10,6 +10,7 @@ User=root
 WorkingDirectory=/var/lib/shipwright
 Environment=RUST_LOG=info
 Environment=SHIPWRIGHT_DEPLOY_DIR=/home/%u/apps
+Environment=SHIPWRIGHT_REPO_PATH=/opt/shipwright/repo
 ExecStart=/usr/local/bin/shipwright-agent
 Restart=always
 RestartSec=10
