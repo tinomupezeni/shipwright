@@ -61,7 +61,7 @@ fn open_firewall_port(port: u16) {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    info!("🚢 Shipwright Agent v0.1.2 starting...");
+    info!("🚢 Shipwright Agent v0.1.3 starting...");
 
     // Detect infrastructure on startup
     info!("🔍 Detecting infrastructure...");
@@ -96,25 +96,55 @@ async fn main() -> anyhow::Result<()> {
     // Channel for broadcasting build events to all connected WebSocket clients
     let (tx, _rx) = broadcast::channel::<AgentMessage>(100);
 
-    // Dynamic Port Discovery
-    let ws_port = find_available_port(8081);
-    let http_port = find_available_port(8083);
+    // Check if running in Docker
+    let is_docker = std::path::Path::new("/.dockerenv").exists();
+
+    // Port Configuration - use env vars if set (Docker mode), otherwise dynamic discovery
+    let ws_port = std::env::var("SHIPWRIGHT_WS_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| {
+            if is_docker {
+                8081 // Default Docker port
+            } else {
+                find_available_port(8081)
+            }
+        });
+
+    let http_port = std::env::var("SHIPWRIGHT_HTTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| {
+            if is_docker {
+                8084 // Default Docker port
+            } else {
+                find_available_port(8083)
+            }
+        });
 
     let ws_addr = format!("0.0.0.0:{}", ws_port);
     let http_addr = format!("0.0.0.0:{}", http_port);
 
-    // Automatic Firewall Management
-    open_firewall_port(ws_port);
-    open_firewall_port(http_port);
+    // Automatic Firewall Management (skip in Docker)
+    if !is_docker {
+        open_firewall_port(ws_port);
+        open_firewall_port(http_port);
+    } else {
+        info!("🐳 Running in Docker - skipping firewall management");
+    }
 
-    // Persist port selection for CLI discovery
-    let state_dir = "/etc/shipwright";
-    let _ = fs::create_dir_all(state_dir);
-    let state_file = format!("{}/agent.env", state_dir);
-    let state_content = format!("SHIPWRIGHT_WS_PORT={}\nSHIPWRIGHT_HTTP_PORT={}\n", ws_port, http_port);
-    if let Err(_e) = fs::write(&state_file, state_content) {
-        // Fallback to local directory if /etc isn't writable (e.g. during dev)
-        fs::write("agent.env", format!("SHIPWRIGHT_WS_PORT={}\nSHIPWRIGHT_HTTP_PORT={}\n", ws_port, http_port))?;
+    // Persist port selection for CLI discovery (not needed in Docker)
+    if !is_docker {
+        let state_dir = "/etc/shipwright";
+        let _ = fs::create_dir_all(state_dir);
+        let state_file = format!("{}/agent.env", state_dir);
+        let state_content = format!("SHIPWRIGHT_WS_PORT={}\nSHIPWRIGHT_HTTP_PORT={}\n", ws_port, http_port);
+        if let Err(_e) = fs::write(&state_file, state_content) {
+            // Fallback to local directory if /etc isn't writable (e.g. during dev)
+            fs::write("agent.env", format!("SHIPWRIGHT_WS_PORT={}\nSHIPWRIGHT_HTTP_PORT={}\n", ws_port, http_port))?;
+        }
+    } else {
+        info!("🐳 Running in Docker - ports configured via environment");
     }
 
     info!("Starting Shipwright Agent...");
