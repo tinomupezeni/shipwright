@@ -26,15 +26,71 @@ Traditional deployment tools either:
 - ✅ Runs comprehensive smoke tests after deployment
 - ✅ Provides real-time deployment feedback via WebSocket
 
-## Quick Start
+## Installation
 
-### 1. Install on VPS
+### Quick Install (Recommended)
+
+**One-line install:**
 
 ```bash
-# Clone the repository
+curl -fsSL https://raw.githubusercontent.com/tinomupezeni/shipwright/main/scripts/install.sh | bash
+```
+
+This installs both the CLI and Agent to `~/.shipwright/bin` and adds it to your PATH.
+
+### Alternative: Install via Cargo
+
+```bash
+# Install from crates.io (when published)
+cargo install shipwright-cli
+cargo install shipwright-agent
+
+# Or from source
 git clone https://github.com/tinomupezeni/shipwright.git
 cd shipwright
+cargo install --path cli
+cargo install --path agent
+```
 
+## Quick Start
+
+### 1. Setup Agent on VPS
+
+If you used the install script, the agent binary is already installed. Now set it up as a service:
+
+```bash
+# Create systemd service
+sudo tee /etc/systemd/system/shipwright-agent.service > /dev/null <<EOF
+[Unit]
+Description=Shipwright Deployment Agent
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=$HOME/.shipwright/bin/shipwright-agent
+Restart=always
+RestartSec=10
+Environment="RUST_LOG=info"
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable shipwright-agent
+sudo systemctl start shipwright-agent
+
+# Verify
+sudo systemctl status shipwright-agent
+```
+
+### Or use the binary directly (manual setup)
+
+```bash
 # Build the agent
 cargo build --release --package shipwright-agent
 
@@ -72,15 +128,18 @@ sudo systemctl status shipwright-agent
 
 ### 2. Install CLI (Local Machine)
 
+The CLI is automatically installed if you used the install script above. Otherwise:
+
 ```bash
-# Build the CLI
+# Use the install script
+curl -fsSL https://raw.githubusercontent.com/tinomupezeni/shipwright/main/scripts/install.sh | bash
+
+# Or via cargo (when published)
+cargo install shipwright-cli
+
+# Or manually
 cargo build --release --package shipwright-cli
-
-# Install CLI
 sudo cp target/release/shipwright /usr/local/bin/
-
-# Or add to PATH
-export PATH="$PATH:$(pwd)/target/release"
 ```
 
 ### 3. Configure Your Project

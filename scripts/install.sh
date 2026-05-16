@@ -1,59 +1,140 @@
 #!/bin/bash
-
-# Shipwright Installer
+# Shipwright Installation Script
+# Works on Linux and macOS
 # Usage: curl -fsSL https://raw.githubusercontent.com/tinomupezeni/shipwright/main/scripts/install.sh | bash
 
 set -e
 
-REPO="tinomupezeni/shipwright" # Replace with your actual username/repo
-GITHUB_URL="https://github.com/$REPO"
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-# Detect OS
+echo -e "${BLUE}"
+echo "  ____  _     _                      _       _     _   "
+echo " / ___|| |__ (_)_ ____      ___ __ (_) __ _| |__ | |_ "
+echo " \___ \| '_ \| | '_ \ \ /\ / / '__| |/ _\` | '_ \| __|"
+echo "  ___) | | | | | |_) \ V  V /| |  | | (_| | | | | |_ "
+echo " |____/|_| |_|_| .__/ \_/\_/ |_|  |_|\__, |_| |_|\__|"
+echo "               |_|                   |___/            "
+echo -e "${NC}"
+echo "Intelligent Deployment Automation for VPS"
+echo ""
+
+# Detect OS and architecture
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "$OS" in
-    Linux)
-        TARGET="x86_64-unknown-linux-gnu"
+    Linux*)
+        OS_TYPE="linux"
         ;;
-    Darwin)
-        if [ "$ARCH" = "arm64" ]; then
-            TARGET="aarch64-apple-darwin"
-        else
-            TARGET="x86_64-apple-darwin"
-        fi
+    Darwin*)
+        OS_TYPE="macos"
         ;;
     *)
-        echo "Unsupported OS: $OS"
+        echo -e "${RED}✗ Unsupported operating system: $OS${NC}"
+        echo "Shipwright currently supports Linux and macOS"
         exit 1
         ;;
 esac
 
-echo "🚀 Installing Shipwright for $TARGET..."
+case "$ARCH" in
+    x86_64 | amd64)
+        ARCH_TYPE="x86_64"
+        ;;
+    aarch64 | arm64)
+        ARCH_TYPE="aarch64"
+        ;;
+    *)
+        echo -e "${RED}✗ Unsupported architecture: $ARCH${NC}"
+        echo "Shipwright currently supports x86_64 and aarch64"
+        exit 1
+        ;;
+esac
 
-# Get latest release version
-LATEST_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+echo -e "${GREEN}✓ Detected: $OS_TYPE ($ARCH_TYPE)${NC}"
 
-if [ -z "$LATEST_VERSION" ]; then
-    echo "❌ Failed to find the latest release. Make sure you have created a release on GitHub."
+# For now, install from source since we don't have releases yet
+echo "Installing from source..."
+
+# Check if cargo is installed
+if ! command -v cargo &> /dev/null; then
+    echo -e "${RED}✗ Cargo not found${NC}"
+    echo "Install Rust from: https://rustup.rs"
+    echo ""
+    echo "Run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
     exit 1
 fi
 
-echo "📦 Downloading Shipwright $LATEST_VERSION..."
-DOWNLOAD_URL="$GITHUB_URL/releases/download/$LATEST_VERSION/shipwright-$TARGET.tar.gz"
+TMP_DIR=$(mktemp -d)
+cd "$TMP_DIR"
 
-curl -L "$DOWNLOAD_URL" -o shipwright.tar.gz
+echo "Cloning repository..."
+git clone https://github.com/tinomupezeni/shipwright.git
+cd shipwright
 
-# Extract
-tar -xzf shipwright.tar.gz
+echo "Building Shipwright CLI..."
+cargo build --release --package shipwright-cli
 
-# Install
-echo "🔧 Installing binaries to /usr/local/bin..."
-sudo mv shipwright-cli /usr/local/bin/shipwright
-sudo mv shipwright-agent /usr/local/bin/shipwright-agent
+echo "Building Shipwright Agent..."
+cargo build --release --package shipwright-agent
 
-# Cleanup
-rm shipwright.tar.gz
+INSTALL_DIR="$HOME/.shipwright/bin"
+mkdir -p "$INSTALL_DIR"
 
-echo "✅ Shipwright installed successfully!"
-echo "Run 'shipwright --help' to get started."
+cp target/release/shipwright "$INSTALL_DIR/"
+cp target/release/shipwright-agent "$INSTALL_DIR/"
+
+cd -
+rm -rf "$TMP_DIR"
+
+# Make binaries executable
+chmod +x "$INSTALL_DIR/shipwright"
+chmod +x "$INSTALL_DIR/shipwright-agent"
+
+# Add to PATH if not already there
+SHELL_CONFIG=""
+case "$SHELL" in
+    */bash)
+        SHELL_CONFIG="$HOME/.bashrc"
+        ;;
+    */zsh)
+        SHELL_CONFIG="$HOME/.zshrc"
+        ;;
+    *)
+        SHELL_CONFIG="$HOME/.profile"
+        ;;
+esac
+
+if [ -f "$SHELL_CONFIG" ]; then
+    if ! grep -q ".shipwright/bin" "$SHELL_CONFIG"; then
+        echo "" >> "$SHELL_CONFIG"
+        echo "# Shipwright" >> "$SHELL_CONFIG"
+        echo "export PATH=\"\$HOME/.shipwright/bin:\$PATH\"" >> "$SHELL_CONFIG"
+        echo -e "${GREEN}✓ Added to PATH in $SHELL_CONFIG${NC}"
+    fi
+fi
+
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}✓ Shipwright installed successfully!${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "Location: $INSTALL_DIR"
+echo ""
+echo "Next steps:"
+echo ""
+echo "  1. Reload your shell:"
+echo -e "     ${BLUE}source $SHELL_CONFIG${NC}"
+echo ""
+echo "  2. Verify installation:"
+echo -e "     ${BLUE}shipwright --version${NC}"
+echo ""
+echo "  3. Get started:"
+echo -e "     ${BLUE}shipwright --help${NC}"
+echo ""
+echo "Documentation: https://github.com/tinomupezeni/shipwright"
+echo ""
