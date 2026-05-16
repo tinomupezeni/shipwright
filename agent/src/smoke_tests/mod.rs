@@ -292,14 +292,14 @@ impl std::fmt::Display for TestReport {
         writeln!(f)?;
 
         // Group results by category
-        let mut pre_deployment = Vec::new();
-        let mut post_build = Vec::new();
-        let mut post_deployment = Vec::new();
+        let mut _pre_deployment: Vec<&TestResult> = Vec::new();
+        let mut _post_build: Vec<&TestResult> = Vec::new();
+        let mut _post_deployment: Vec<&TestResult> = Vec::new();
 
         for result in &self.results {
             // We'll need to track category in TestResult for this to work properly
             // For now, just add to post_deployment
-            post_deployment.push(result);
+            _post_deployment.push(result);
         }
 
         writeln!(f, "-----------------------------------------------------")?;
