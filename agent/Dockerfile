@@ -17,8 +17,8 @@ COPY common ./common
 COPY agent ./agent
 COPY cli ./cli
 
-# Build the agent in release mode
-RUN cargo build --release --package shipwright-agent
+# Build the agent in release mode with locked dependencies
+RUN cargo build --release --locked --package shipwright-agent
 
 # Runtime stage - minimal image
 FROM debian:bookworm-slim
