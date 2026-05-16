@@ -215,12 +215,10 @@ async fn detect_shared_resources(docker: &Docker) -> Result<SharedResources> {
 
 /// Detect deployment directories (e.g., ~/apps/*)
 async fn detect_deploy_directories() -> Result<Vec<String>> {
-    let mut possible_dirs = vec![
-        "/opt/apps".to_string(),
-        "/var/www".to_string(),
-    ];
+    let mut possible_dirs = vec![];
 
-    // Check all user home directories for apps/projects folders
+    // PRIORITY 1: Check all user home directories for apps/projects folders
+    // This should be checked FIRST so user directories take precedence
     if let Ok(entries) = std::fs::read_dir("/home") {
         for entry in entries.flatten() {
             if let Ok(file_type) = entry.file_type() {
@@ -233,10 +231,18 @@ async fn detect_deploy_directories() -> Result<Vec<String>> {
         }
     }
 
-    // Also check current user's home
+    // PRIORITY 2: Current user's home (in case not in /home)
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    possible_dirs.push(format!("{}/apps", home));
-    possible_dirs.push(format!("{}/projects", home));
+    if !home.starts_with("/home/") {
+        possible_dirs.push(format!("{}/apps", home));
+        possible_dirs.push(format!("{}/projects", home));
+    }
+
+    // PRIORITY 3: System-wide directories
+    possible_dirs.push("/opt/apps".to_string());
+
+    // NOTE: /var/www is intentionally excluded as it's typically for web server files,
+    // not application deployments. Use /opt/apps or /home/user/apps instead.
 
     let mut found_dirs = Vec::new();
 
