@@ -133,8 +133,12 @@ pub struct ProjectConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BuildConfig {
-    pub image: String,
+    /// Image name (optional - not needed for docker-compose deployments)
+    pub image: Option<String>,
+
     pub cache: Option<Vec<String>>,
+
+    #[serde(default)]
     pub steps: Vec<String>,
 
     /// Docker Compose file to use for building (if using compose strategy)
