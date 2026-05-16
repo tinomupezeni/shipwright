@@ -1,0 +1,28 @@
+[Unit]
+Description=Shipwright Agent - Automated Deployment System
+After=network.target docker.service
+Requires=docker.service
+Documentation=https://github.com/tinomupezeni/shipwright
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/lib/shipwright
+Environment=RUST_LOG=info
+Environment=SHIPWRIGHT_DEPLOY_DIR=/home/%u/apps
+ExecStart=/usr/local/bin/shipwright-agent
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Auto-restart on failure
+StartLimitInterval=0
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

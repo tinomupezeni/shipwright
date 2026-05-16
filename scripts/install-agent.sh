@@ -1,6 +1,6 @@
 #!/bin/bash
-# Shipwright Agent Installation Script (Docker-based)
-# Installs the Shipwright agent as a Docker container for easy updates and management
+# Shipwright Agent Installation Script (Systemd)
+# Installs the Shipwright agent as a native systemd service
 
 set -e
 
@@ -16,11 +16,29 @@ echo "  ____  _     _                      _       _     _   "
 echo " / ___|| |__ (_)_ ____      ___ __ (_) __ _| |__ | |_ "
 echo " \___ \| '_ \| | '_ \ \ /\ / / '__| |/ _\` | '_ \| __|"
 echo "  ___) | | | | | |_) \ V  V /| |  | | (_| | | | | |_ "
-echo " |____/|_| |_|_| .__/ \_/\_/ |_|  |_|\__, |_| |_|\__|"
+echo " |____/|_| |_|_| .__/ \_/\_/ |_|  |_|\__, |_| |_|____|"
 echo "               |_|                   |___/            "
 echo -e "${NC}"
-echo "Shipwright Agent - Docker Installation"
+echo "Shipwright Agent - Systemd Installation"
 echo ""
+
+# Check if running as root or with sudo
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${RED}✗ This script must be run as root or with sudo${NC}"
+   exit 1
+fi
+
+# Check if Rust/Cargo is installed
+if ! command -v cargo &> /dev/null; then
+    echo -e "${RED}✗ Cargo not found${NC}"
+    echo "Shipwright agent requires Rust to build."
+    echo "Install Rust from: https://rustup.rs"
+    echo ""
+    echo "Run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Cargo found${NC}"
 
 # Check if Docker is installed
 if ! command -v docker &> /dev/null; then
@@ -31,16 +49,8 @@ fi
 
 echo -e "${GREEN}✓ Docker found${NC}"
 
-# Check if docker-compose is available
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    echo -e "${YELLOW}⚠ docker-compose not found, will use 'docker compose'${NC}"
-    COMPOSE_CMD="docker compose"
-else
-    COMPOSE_CMD="docker-compose"
-fi
-
 # Create installation directory
-INSTALL_DIR="$HOME/.shipwright"
+INSTALL_DIR="/opt/shipwright"
 mkdir -p "$INSTALL_DIR"
 
 echo "📂 Installation directory: $INSTALL_DIR"
@@ -56,43 +66,8 @@ else
     cd "$INSTALL_DIR/repo"
 fi
 
-# Copy docker-compose file
-cp docker-compose.agent.yml "$INSTALL_DIR/docker-compose.yml"
-
-# Create .env file for configuration
-if [ ! -f "$INSTALL_DIR/.env" ]; then
-    cat > "$INSTALL_DIR/.env" << EOF
-# Shipwright Agent Configuration
-RUST_LOG=info
-HOME=$HOME
-USER=$USER
-SHIPWRIGHT_DEPLOY_DIR=$HOME/apps
-EOF
-    echo -e "${GREEN}✓ Created configuration file${NC}"
-fi
-
-# Create apps directory
-mkdir -p "$HOME/apps"
-
-# Create or join proxy network
-if ! docker network inspect proxy-tier &> /dev/null; then
-    echo "🌐 Creating proxy-tier network..."
-    docker network create proxy-tier
-fi
-
-# Check if Rust/Cargo is installed for local build
-if ! command -v cargo &> /dev/null; then
-    echo -e "${RED}✗ Cargo not found${NC}"
-    echo "Shipwright agent requires Rust to build locally."
-    echo "Install Rust from: https://rustup.rs"
-    echo ""
-    echo "Run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-    exit 1
-fi
-
-# Build the agent binary locally (avoids Docker dependency conflicts)
+# Build the agent binary
 echo "🔨 Building Shipwright agent binary..."
-cd "$INSTALL_DIR/repo"
 cargo build --release --package shipwright-agent
 
 if [ ! -f "target/release/shipwright-agent" ]; then
@@ -102,51 +77,57 @@ fi
 
 echo -e "${GREEN}✓ Binary built successfully${NC}"
 
-# Build Docker image with pre-built binary
-echo "📦 Packaging agent into Docker container..."
-docker build -f agent/Dockerfile.runtime -t shipwright-agent:latest .
+# Install binary
+echo "📦 Installing agent binary..."
+cp target/release/shipwright-agent /usr/local/bin/
+chmod +x /usr/local/bin/shipwright-agent
 
-# Stop existing container if running
-if docker ps -a --format '{{.Names}}' | grep -q "^shipwright-agent$"; then
-    echo "🔄 Stopping existing agent container..."
-    docker stop shipwright-agent || true
-    docker rm shipwright-agent || true
+# Create required directories
+mkdir -p /var/lib/shipwright
+mkdir -p /etc/shipwright
+mkdir -p /home/$SUDO_USER/apps
+
+# Install systemd service
+echo "⚙️  Installing systemd service..."
+cp scripts/shipwright-agent.service /etc/systemd/system/
+systemctl daemon-reload
+
+# Stop existing service if running
+if systemctl is-active --quiet shipwright-agent; then
+    echo "🔄 Stopping existing agent service..."
+    systemctl stop shipwright-agent
 fi
 
-# Start the agent
+# Enable and start the service
 echo "🚀 Starting Shipwright agent..."
-cd "$INSTALL_DIR"
-$COMPOSE_CMD up -d
+systemctl enable shipwright-agent
+systemctl start shipwright-agent
 
-# Wait for health check
-echo "⏳ Waiting for agent to be ready..."
-sleep 5
+# Wait for service to start
+sleep 3
 
-# Check if agent is healthy
-if docker ps --format '{{.Names}}\t{{.Status}}' | grep shipwright-agent | grep -q "healthy\|Up"; then
+# Check if agent is running
+if systemctl is-active --quiet shipwright-agent; then
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}✓ Shipwright Agent installed successfully!${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo "📊 Agent Status:"
-    docker ps --filter name=shipwright-agent --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    systemctl status shipwright-agent --no-pager -l
     echo ""
     echo "📝 Next Steps:"
     echo ""
-    echo "  1. Configure your domain for HTTPS webhooks (optional but recommended):"
-    echo -e "     ${BLUE}shipwright setup-domain yourdomain.com${NC}"
+    echo "  1. Check agent logs:"
+    echo -e "     ${BLUE}journalctl -u shipwright-agent -f${NC}"
     echo ""
     echo "  2. Register your first project:"
     echo -e "     ${BLUE}cd your-project && shipwright register${NC}"
     echo ""
-    echo "  3. View agent logs:"
-    echo -e "     ${BLUE}docker logs -f shipwright-agent${NC}"
-    echo ""
-    echo "  4. Update agent (automatic via webhook or manual):"
-    echo -e "     ${BLUE}cd $INSTALL_DIR && docker-compose pull && docker-compose up -d${NC}"
+    echo "  3. Update agent (will auto-restart via webhook or manual):"
+    echo -e "     ${BLUE}systemctl restart shipwright-agent${NC}"
     echo ""
 else
     echo -e "${RED}✗ Agent failed to start properly${NC}"
-    echo "Check logs with: docker logs shipwright-agent"
+    echo "Check logs with: journalctl -u shipwright-agent -n 50"
     exit 1
 fi

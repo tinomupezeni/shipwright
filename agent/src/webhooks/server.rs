@@ -290,7 +290,7 @@ async fn handle_self_update_webhook(
         return (StatusCode::OK, format!("Ignoring push to branch '{}'", pushed_branch)).into_response();
     }
 
-    // Check if running in Docker
+    // Check if running in Docker or systemd
     let is_docker = std::path::Path::new("/.dockerenv").exists();
 
     if is_docker {
@@ -305,9 +305,82 @@ async fn handle_self_update_webhook(
 
         (StatusCode::OK, "Self-update triggered (Docker mode)").into_response()
     } else {
-        info!("⚠️  Self-update webhook received but not running in Docker. Manual update required.");
-        (StatusCode::OK, "Not running in Docker - manual update required").into_response()
+        info!("🔄 Triggering systemd-based self-update...");
+
+        // Spawn update process in background
+        tokio::spawn(async move {
+            if let Err(e) = perform_systemd_self_update().await {
+                error!("Self-update failed: {}", e);
+            }
+        });
+
+        (StatusCode::OK, "Self-update triggered (systemd mode)").into_response()
     }
+}
+
+/// Perform systemd-based self-update
+async fn perform_systemd_self_update() -> anyhow::Result<()> {
+    use tokio::process::Command;
+
+    let repo_path = std::env::var("SHIPWRIGHT_REPO_PATH")
+        .unwrap_or_else(|_| "/opt/shipwright/repo".to_string());
+
+    info!("Step 1: Pulling latest code from GitHub...");
+
+    let output = Command::new("git")
+        .current_dir(&repo_path)
+        .args(["pull", "origin", "main"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to pull latest code: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("Step 2: Building updated binary...");
+
+    let output = Command::new("cargo")
+        .current_dir(&repo_path)
+        .args(["build", "--release", "--package", "shipwright-agent"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to build binary: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("Step 3: Installing updated binary...");
+
+    let output = Command::new("cp")
+        .args([
+            &format!("{}/target/release/shipwright-agent", repo_path),
+            "/usr/local/bin/shipwright-agent"
+        ])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to install binary: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("Step 4: Scheduling service restart in 5 seconds...");
+
+    // Give time for response to be sent
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+    info!("Step 5: Restarting systemd service...");
+
+    let output = Command::new("systemctl")
+        .args(["restart", "shipwright-agent"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to restart service: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("✅ Self-update completed successfully");
+    Ok(())
 }
 
 /// Perform Docker-based self-update
