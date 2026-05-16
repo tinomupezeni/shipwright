@@ -262,6 +262,7 @@ fn find_compose_file(build_dir: &str, preferred: &Option<String>) -> Result<Stri
     }
 
     // Check common compose file names in order of preference
+    // Including subdirectories like infra/, deploy/, etc.
     let candidates = [
         "docker-compose.deploy.yml",
         "docker-compose.vps.yml",
@@ -271,6 +272,10 @@ fn find_compose_file(build_dir: &str, preferred: &Option<String>) -> Result<Stri
         "docker-compose.yaml",
         "compose.yml",
         "compose.yaml",
+        "infra/docker-compose.deploy.yml",
+        "infra/docker-compose.yml",
+        "deploy/docker-compose.yml",
+        ".docker/docker-compose.yml",
     ];
 
     for candidate in candidates {
