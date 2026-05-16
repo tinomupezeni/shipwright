@@ -152,12 +152,17 @@ pub struct BuildConfig {
     pub environment: Option<std::collections::HashMap<String, String>>,
 }
 
+fn default_replicas() -> u32 {
+    1
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeployConfig {
     #[serde(rename = "type")]
     pub deploy_type: String,
     pub registry: Option<RegistryConfig>,
     pub vps: Option<VpsConfig>,
+    #[serde(default = "default_replicas")]
     pub replicas: u32,
     pub health: Option<HealthConfig>,
     pub resources: Option<ResourceConfig>,
