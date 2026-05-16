@@ -235,9 +235,19 @@ async fn validate_compose_file(ctx: DeploymentContext) -> Result<()> {
 
 /// Verify images were built successfully
 async fn verify_images_built(ctx: DeploymentContext) -> Result<()> {
+    use crate::pipeline::deploy::DeployStrategy;
+
+    // For docker-compose deployments, skip this test
+    // Compose builds service-specific images (e.g., myapp-web, myapp-api)
+    // not a single project image. Container health is verified in check_containers_running.
+    if matches!(ctx.strategy, DeployStrategy::Compose { .. }) {
+        info!("✓ Skipping image verification for docker-compose deployment (verified via container check)");
+        return Ok(());
+    }
+
     let docker = Docker::connect_with_socket_defaults()?;
 
-    // Get expected image name
+    // Get expected image name for standalone deployments
     let image_name = format!("{}:latest", ctx.project_name);
 
     // Check if image exists
