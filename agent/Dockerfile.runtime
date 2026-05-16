@@ -14,8 +14,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     docker.io \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for security
-RUN useradd -m -u 1000 shipwright
+# Create non-root user for security (UID 1001 to avoid conflicts with host user)
+RUN useradd -m -u 1001 shipwright
 
 # Create required directories
 RUN mkdir -p /var/lib/shipwright /etc/shipwright && \
