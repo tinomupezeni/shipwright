@@ -4,6 +4,7 @@ mod db;
 mod webhooks;
 mod pipeline;
 mod infrastructure;
+mod smoke_tests;
 
 use tracing_subscriber;
 use std::sync::{Arc, Mutex};

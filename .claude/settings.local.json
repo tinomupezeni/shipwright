@@ -7,7 +7,9 @@
       "Bash(scp:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(ssh-add:*)",
+      "Bash(find:*)"
     ]
   }
 }
