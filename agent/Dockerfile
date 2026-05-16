@@ -11,10 +11,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Copy workspace files
+# Copy entire workspace (needed for workspace resolution)
 COPY Cargo.toml Cargo.lock ./
 COPY common ./common
 COPY agent ./agent
+COPY cli ./cli
 
 # Build the agent in release mode
 RUN cargo build --release --package shipwright-agent
