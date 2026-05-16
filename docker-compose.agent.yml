@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  shipwright-agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    image: shipwright-agent:latest
+    container_name: shipwright-agent
+    restart: unless-stopped
+
+    # Mount Docker socket to control containers
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - shipwright-data:/var/lib/shipwright
+      - shipwright-config:/etc/shipwright
+      # Mount SSH keys for git operations (read-only)
+      - ${HOME}/.ssh:/home/shipwright/.ssh:ro
+      # Mount deployment directory
+      - ${SHIPWRIGHT_DEPLOY_DIR:-/home/${USER}/apps}:/apps
+
+    # Ports for WebSocket and HTTP webhooks
+    ports:
+      - "8081:8081"  # WebSocket
+      - "8084:8084"  # HTTP Webhooks
+
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - SHIPWRIGHT_WS_PORT=8081
+      - SHIPWRIGHT_HTTP_PORT=8084
+      - SHIPWRIGHT_DEPLOY_DIR=/apps
+
+    # Connect to proxy network if it exists
+    networks:
+      - shipwright-internal
+      - proxy-tier  # For webhook routing through reverse proxy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    labels:
+      - "com.shipwright.component=agent"
+      - "com.shipwright.version=0.1.0"
+
+networks:
+  shipwright-internal:
+    driver: bridge
+
+  # Join existing proxy network
+  proxy-tier:
+    external: true
+    # If proxy-tier doesn't exist, create it
+    # Users can manually create: docker network create proxy-tier
+
+volumes:
+  shipwright-data:
+    driver: local
+  shipwright-config:
+    driver: local

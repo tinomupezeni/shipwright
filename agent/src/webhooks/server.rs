@@ -1,5 +1,5 @@
 use axum::{
-    routing::post,
+    routing::{get, post},
     Router,
     Json,
     extract::State,
@@ -52,7 +52,9 @@ pub struct AppState {
 
 pub async fn start_server(addr: &str, state: AppState) -> anyhow::Result<()> {
     let app = Router::new()
+        .route("/health", get(health_check))
         .route("/webhooks/github", post(handle_github_webhook))
+        .route("/webhooks/shipwright", post(handle_self_update_webhook))
         .route("/projects", post(register_project))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
@@ -236,4 +238,109 @@ async fn handle_github_webhook(
         warn!("No head_commit in webhook payload");
         (StatusCode::OK, "No commit to deploy").into_response()
     }
+}
+
+/// Health check endpoint for monitoring and load balancers
+async fn health_check() -> impl IntoResponse {
+    #[derive(Serialize)]
+    struct HealthResponse {
+        status: String,
+        version: String,
+        uptime: String,
+    }
+
+    let uptime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let response = HealthResponse {
+        status: "healthy".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime: format!("{}s", uptime),
+    };
+
+    (StatusCode::OK, Json(response))
+}
+
+/// Handle self-update webhook for Shipwright repository
+/// When the Shipwright repo is updated, the agent pulls the latest image and restarts
+async fn handle_self_update_webhook(
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    // Parse the JSON payload
+    let payload: GitHubPushEvent = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to parse self-update webhook payload: {}", e);
+            return (StatusCode::BAD_REQUEST, "Invalid JSON payload").into_response();
+        }
+    };
+
+    info!("Received self-update webhook for Shipwright repository");
+
+    // Only update on push to main branch
+    let pushed_branch = payload.reference
+        .strip_prefix("refs/heads/")
+        .unwrap_or(&payload.reference);
+
+    if pushed_branch != "main" {
+        info!("Ignoring self-update push to branch '{}'", pushed_branch);
+        return (StatusCode::OK, format!("Ignoring push to branch '{}'", pushed_branch)).into_response();
+    }
+
+    // Check if running in Docker
+    let is_docker = std::path::Path::new("/.dockerenv").exists();
+
+    if is_docker {
+        info!("🔄 Triggering Docker-based self-update...");
+
+        // Spawn update process in background
+        tokio::spawn(async move {
+            if let Err(e) = perform_docker_self_update().await {
+                error!("Self-update failed: {}", e);
+            }
+        });
+
+        (StatusCode::OK, "Self-update triggered (Docker mode)").into_response()
+    } else {
+        info!("⚠️  Self-update webhook received but not running in Docker. Manual update required.");
+        (StatusCode::OK, "Not running in Docker - manual update required").into_response()
+    }
+}
+
+/// Perform Docker-based self-update
+async fn perform_docker_self_update() -> anyhow::Result<()> {
+    use tokio::process::Command;
+
+    info!("Step 1: Pulling latest Shipwright agent image...");
+
+    let output = Command::new("docker")
+        .args(["pull", "shipwright-agent:latest"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to pull latest image: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("Step 2: Scheduling container restart in 5 seconds...");
+
+    // Give time for response to be sent
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+    info!("Step 3: Restarting container...");
+
+    let output = Command::new("docker")
+        .args(["restart", "shipwright-agent"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to restart container: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("✅ Self-update completed successfully");
+    Ok(())
 }

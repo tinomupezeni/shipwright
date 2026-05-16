@@ -31,7 +31,28 @@ Traditional deployment tools either:
 
 ## Installation
 
-### Quick Install (Recommended)
+### Agent (VPS)
+
+The agent runs as a Docker container for easy updates and management.
+
+**One-line install:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tinomupezeni/shipwright/main/scripts/install-agent.sh | bash
+```
+
+This installs the Shipwright agent as a Docker container with:
+- ✅ Automatic updates via webhooks
+- ✅ HTTPS support through existing reverse proxy
+- ✅ Persistent database and configuration
+- ✅ Health monitoring and auto-restart
+
+**Requirements:**
+- Docker and docker-compose installed
+- Existing reverse proxy (Caddy/Nginx) recommended for HTTPS
+- SSH keys configured for git operations
+
+### CLI (Local Machine)
 
 **One-line install:**
 
@@ -39,110 +60,61 @@ Traditional deployment tools either:
 curl -fsSL https://raw.githubusercontent.com/tinomupezeni/shipwright/main/scripts/install.sh | bash
 ```
 
-This installs both the CLI and Agent to `~/.shipwright/bin` and adds it to your PATH.
-
-### Alternative: Install via Cargo
+Or via Cargo:
 
 ```bash
-# Install from crates.io (when published)
+# From crates.io (when published)
 cargo install shipwright-cli
-cargo install shipwright-agent
 
-# Or from source
+# From source
 git clone https://github.com/tinomupezeni/shipwright.git
 cd shipwright
 cargo install --path cli
-cargo install --path agent
 ```
 
 ## Quick Start
 
-### 1. Setup Agent on VPS
-
-If you used the install script, the agent binary is already installed. Now set it up as a service:
+### 1. Install Agent on VPS
 
 ```bash
-# Create systemd service
-sudo tee /etc/systemd/system/shipwright-agent.service > /dev/null <<EOF
-[Unit]
-Description=Shipwright Deployment Agent
-After=network.target docker.service
-Requires=docker.service
+# SSH into your VPS
+ssh user@your-server.com
 
-[Service]
-Type=simple
-ExecStart=$HOME/.shipwright/bin/shipwright-agent
-Restart=always
-RestartSec=10
-Environment="RUST_LOG=info"
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Enable and start
-sudo systemctl daemon-reload
-sudo systemctl enable shipwright-agent
-sudo systemctl start shipwright-agent
-
-# Verify
-sudo systemctl status shipwright-agent
+# Install the containerized agent
+curl -fsSL https://raw.githubusercontent.com/tinomupezeni/shipwright/main/scripts/install-agent.sh | bash
 ```
 
-### Or use the binary directly (manual setup)
+The agent automatically:
+- Builds and runs in Docker
+- Joins your existing proxy network
+- Opens required firewall ports
+- Creates deployment directories
+
+### 2. Configure HTTPS Webhooks (Optional but Recommended)
+
+If you have a domain pointing to your VPS, Shipwright can automatically configure HTTPS:
 
 ```bash
-# Build the agent
-cargo build --release --package shipwright-agent
-
-# Install agent
-sudo cp target/release/shipwright-agent /usr/local/bin/
-
-# Create systemd service
-sudo tee /etc/systemd/system/shipwright-agent.service > /dev/null <<EOF
-[Unit]
-Description=Shipwright Deployment Agent
-After=network.target docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/shipwright-agent
-Restart=always
-RestartSec=10
-Environment="RUST_LOG=info"
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Enable and start the service
-sudo systemctl daemon-reload
-sudo systemctl enable shipwright-agent
-sudo systemctl start shipwright-agent
-
-# Verify it's running
-sudo systemctl status shipwright-agent
+# The agent will auto-detect your reverse proxy (Caddy/Nginx)
+# and configure webhook routing for HTTPS
+# This happens automatically during first project registration
 ```
 
-### 2. Install CLI (Local Machine)
+**How it works:**
+- Agent detects existing Caddy/Nginx proxy
+- Auto-generates proxy configuration for webhooks
+- Routes: `https://yourdomain.com/shipwright/webhooks/github` → `http://localhost:8084/webhooks/github`
+- Uses your existing SSL certificates
+- No manual configuration needed
 
-The CLI is automatically installed if you used the install script above. Otherwise:
+### 3. Install CLI (Local Machine)
 
 ```bash
-# Use the install script
+# Install the CLI
 curl -fsSL https://raw.githubusercontent.com/tinomupezeni/shipwright/main/scripts/install.sh | bash
 
-# Or via cargo (when published)
-cargo install shipwright-cli
-
-# Or manually
-cargo build --release --package shipwright-cli
-sudo cp target/release/shipwright /usr/local/bin/
+# Verify installation
+shipwright --version
 ```
 
 ### 3. Configure Your Project
