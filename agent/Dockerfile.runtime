@@ -1,11 +1,12 @@
 # Runtime-only Dockerfile for Shipwright Agent
 # Expects pre-built binary at target/release/shipwright-agent
 # This avoids Rust dependency conflicts by building outside Docker
+# Uses Ubuntu 24.04 for glibc 2.39+ compatibility with modern Rust binaries
 
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 # Install runtime dependencies only
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ca-certificates \
     git \
     openssh-client \
