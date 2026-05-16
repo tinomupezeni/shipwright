@@ -4,7 +4,7 @@ services:
   shipwright-agent:
     build:
       context: .
-      dockerfile: agent/Dockerfile
+      dockerfile: agent/Dockerfile.runtime
     image: shipwright-agent:latest
     container_name: shipwright-agent
     restart: unless-stopped
@@ -18,6 +18,10 @@ services:
       - ${HOME}/.ssh:/home/shipwright/.ssh:ro
       # Mount deployment directory
       - ${SHIPWRIGHT_DEPLOY_DIR:-/home/${USER}/apps}:/apps
+      # Mount shipwright repo for self-updates
+      - ${HOME}/.shipwright/repo:/home/shipwright/.shipwright/repo
+      # Mount cargo for self-update builds
+      - ${HOME}/.cargo:/home/shipwright/.cargo:ro
 
     # Ports for WebSocket and HTTP webhooks
     ports:
@@ -29,6 +33,8 @@ services:
       - SHIPWRIGHT_WS_PORT=8081
       - SHIPWRIGHT_HTTP_PORT=8084
       - SHIPWRIGHT_DEPLOY_DIR=/apps
+      - SHIPWRIGHT_REPO_PATH=/home/shipwright/.shipwright/repo
+      - PATH=/home/shipwright/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
     # Connect to proxy network if it exists
     networks:

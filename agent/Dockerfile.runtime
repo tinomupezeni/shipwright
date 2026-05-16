@@ -1,0 +1,42 @@
+# Runtime-only Dockerfile for Shipwright Agent
+# Expects pre-built binary at target/release/shipwright-agent
+# This avoids Rust dependency conflicts by building outside Docker
+
+FROM debian:bookworm-slim
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    git \
+    openssh-client \
+    curl \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 shipwright
+
+# Create required directories
+RUN mkdir -p /var/lib/shipwright /etc/shipwright && \
+    chown -R shipwright:shipwright /var/lib/shipwright /etc/shipwright
+
+# Copy pre-built binary (must be built before docker build)
+COPY target/release/shipwright-agent /usr/local/bin/shipwright-agent
+RUN chmod +x /usr/local/bin/shipwright-agent
+
+# Switch to non-root user
+USER shipwright
+WORKDIR /var/lib/shipwright
+
+# Expose ports
+EXPOSE 8081 8084
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8084/health || exit 1
+
+# Environment variables
+ENV RUST_LOG=info
+
+# Run the agent
+CMD ["/usr/local/bin/shipwright-agent"]

@@ -80,10 +80,31 @@ if ! docker network inspect proxy-tier &> /dev/null; then
     docker network create proxy-tier
 fi
 
-# Build the agent image
-echo "🔨 Building Shipwright agent Docker image..."
+# Check if Rust/Cargo is installed for local build
+if ! command -v cargo &> /dev/null; then
+    echo -e "${RED}✗ Cargo not found${NC}"
+    echo "Shipwright agent requires Rust to build locally."
+    echo "Install Rust from: https://rustup.rs"
+    echo ""
+    echo "Run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    exit 1
+fi
+
+# Build the agent binary locally (avoids Docker dependency conflicts)
+echo "🔨 Building Shipwright agent binary..."
 cd "$INSTALL_DIR/repo"
-docker build -f agent/Dockerfile -t shipwright-agent:latest .
+cargo build --release --package shipwright-agent
+
+if [ ! -f "target/release/shipwright-agent" ]; then
+    echo -e "${RED}✗ Build failed - binary not found${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Binary built successfully${NC}"
+
+# Build Docker image with pre-built binary
+echo "📦 Packaging agent into Docker container..."
+docker build -f agent/Dockerfile.runtime -t shipwright-agent:latest .
 
 # Stop existing container if running
 if docker ps -a --format '{{.Names}}' | grep -q "^shipwright-agent$"; then

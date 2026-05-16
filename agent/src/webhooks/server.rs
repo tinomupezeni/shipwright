@@ -314,23 +314,51 @@ async fn handle_self_update_webhook(
 async fn perform_docker_self_update() -> anyhow::Result<()> {
     use tokio::process::Command;
 
-    info!("Step 1: Pulling latest Shipwright agent image...");
+    let repo_path = std::env::var("SHIPWRIGHT_REPO_PATH")
+        .unwrap_or_else(|_| "/home/shipwright/.shipwright/repo".to_string());
 
-    let output = Command::new("docker")
-        .args(["pull", "shipwright-agent:latest"])
+    info!("Step 1: Pulling latest code from GitHub...");
+
+    let output = Command::new("git")
+        .current_dir(&repo_path)
+        .args(["pull", "origin", "main"])
         .output()
         .await?;
 
     if !output.status.success() {
-        anyhow::bail!("Failed to pull latest image: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!("Failed to pull latest code: {}", String::from_utf8_lossy(&output.stderr));
     }
 
-    info!("Step 2: Scheduling container restart in 5 seconds...");
+    info!("Step 2: Building updated binary...");
+
+    let output = Command::new("cargo")
+        .current_dir(&repo_path)
+        .args(["build", "--release", "--package", "shipwright-agent"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to build binary: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("Step 3: Rebuilding Docker image with new binary...");
+
+    let output = Command::new("docker")
+        .current_dir(&repo_path)
+        .args(["build", "-f", "agent/Dockerfile.runtime", "-t", "shipwright-agent:latest", "."])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to build Docker image: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    info!("Step 4: Scheduling container restart in 5 seconds...");
 
     // Give time for response to be sent
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
-    info!("Step 3: Restarting container...");
+    info!("Step 5: Restarting container with new image...");
 
     let output = Command::new("docker")
         .args(["restart", "shipwright-agent"])
