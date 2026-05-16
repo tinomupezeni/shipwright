@@ -16,6 +16,7 @@ pub enum DeployStrategy {
     Hybrid,
 }
 
+#[derive(Clone)]
 pub struct DeploymentContext {
     pub project_name: String,
     pub build_dir: String,
@@ -41,6 +42,38 @@ impl DeploymentContext {
 
     /// Execute deployment based on strategy
     pub async fn deploy(&self, config: Option<&Config>) -> Result<()> {
+        use crate::smoke_tests::{SmokeTestRunner, SmokeTestConfig, TestCategory};
+
+        // Configure smoke tests
+        let smoke_config = if let Some(cfg) = config {
+            if let Some(st_config) = &cfg.smoke_tests {
+                SmokeTestConfig {
+                    enabled: st_config.enabled,
+                    fail_on_error: st_config.fail_on_error,
+                    categories: st_config.categories.iter().map(|c| match c.as_str() {
+                        "pre_deployment" => TestCategory::PreDeployment,
+                        "post_build" => TestCategory::PostBuild,
+                        "post_deployment" => TestCategory::PostDeployment,
+                        "integration" => TestCategory::Integration,
+                        _ => TestCategory::PostDeployment,
+                    }).collect(),
+                    disabled_tests: st_config.disabled_tests.clone(),
+                }
+            } else {
+                SmokeTestConfig::default()
+            }
+        } else {
+            SmokeTestConfig::default()
+        };
+
+        // Run pre-deployment smoke tests
+        if smoke_config.enabled {
+            info!("🧪 Running pre-deployment smoke tests...");
+            let mut test_runner = SmokeTestRunner::new(self.clone(), smoke_config.clone());
+            test_runner.run_category(TestCategory::PreDeployment).await?;
+        }
+
+        // Execute deployment
         match &self.strategy {
             DeployStrategy::Standalone => self.deploy_standalone().await?,
             DeployStrategy::Compose { file } => self.deploy_compose(file).await?,
@@ -50,6 +83,24 @@ impl DeploymentContext {
         // Update proxy configuration if needed
         if let Some(cfg) = config {
             self.update_proxy_config(cfg).await?;
+        }
+
+        // Run post-deployment smoke tests
+        if smoke_config.enabled {
+            info!("🧪 Running post-deployment smoke tests...");
+            let mut test_runner = SmokeTestRunner::new(self.clone(), smoke_config.clone());
+            test_runner.run_category(TestCategory::PostDeployment).await?;
+
+            let report = test_runner.generate_report();
+            info!("\n{}", report);
+
+            if report.has_critical_failures() && smoke_config.fail_on_error {
+                return Err(anyhow::anyhow!("🚨 Deployment failed smoke tests - {} critical failure(s)", report.critical_failures));
+            }
+
+            if report.warnings > 0 {
+                warn!("⚠️  Deployment completed with {} warning(s) - review logs", report.warnings);
+            }
         }
 
         Ok(())

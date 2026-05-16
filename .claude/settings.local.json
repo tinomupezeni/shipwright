@@ -9,7 +9,8 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(ssh-add:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(cargo check:*)"
     ]
   }
 }

@@ -8,6 +8,7 @@ pub struct Config {
     pub deploy: DeployConfig,
     pub infrastructure: Option<InfrastructureConfig>,
     pub notifications: Option<NotificationsConfig>,
+    pub smoke_tests: Option<SmokeTestsConfig>,
 }
 
 /// Infrastructure configuration for existing VPS setups
@@ -236,4 +237,43 @@ pub struct NotificationsConfig {
 pub struct SlackConfig {
     pub webhook: String,
     pub on: Vec<String>,
+}
+
+/// Smoke tests configuration
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SmokeTestsConfig {
+    /// Enable or disable smoke tests
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Fail deployment on critical test failures
+    #[serde(default = "default_true")]
+    pub fail_on_error: bool,
+
+    /// Test categories to run
+    #[serde(default = "default_test_categories")]
+    pub categories: Vec<String>,
+
+    /// Tests to disable
+    #[serde(default)]
+    pub disabled_tests: Vec<String>,
+
+    /// Test-specific configuration
+    #[serde(default)]
+    pub test_config: std::collections::HashMap<String, TestConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TestConfig {
+    pub enabled: Option<bool>,
+    pub timeout: Option<String>,
+    pub retries: Option<u32>,
+}
+
+fn default_test_categories() -> Vec<String> {
+    vec![
+        "pre_deployment".to_string(),
+        "post_build".to_string(),
+        "post_deployment".to_string(),
+    ]
 }

@@ -49,9 +49,47 @@ pub async fn run_pipeline(
         return Err(e);
     }
 
-    // 4. Deploy using infrastructure-aware deployment
+    // 3.5. Run post-build smoke tests
+    use crate::smoke_tests::{SmokeTestRunner, SmokeTestConfig, TestCategory};
+
     let build_dir_str = build_dir.to_string_lossy().to_string();
     let deployment = DeploymentContext::new(project_name, &build_dir_str, config.as_ref()).await?;
+
+    let smoke_config = if let Some(cfg) = &config {
+        if let Some(st_config) = &cfg.smoke_tests {
+            SmokeTestConfig {
+                enabled: st_config.enabled,
+                fail_on_error: st_config.fail_on_error,
+                categories: st_config.categories.iter().map(|c| match c.as_str() {
+                    "pre_deployment" => TestCategory::PreDeployment,
+                    "post_build" => TestCategory::PostBuild,
+                    "post_deployment" => TestCategory::PostDeployment,
+                    "integration" => TestCategory::Integration,
+                    _ => TestCategory::PostDeployment,
+                }).collect(),
+                disabled_tests: st_config.disabled_tests.clone(),
+            }
+        } else {
+            SmokeTestConfig::default()
+        }
+    } else {
+        SmokeTestConfig::default()
+    };
+
+    if smoke_config.enabled {
+        info!("🧪 Running post-build smoke tests...");
+        let mut test_runner = SmokeTestRunner::new(deployment.clone(), smoke_config.clone());
+
+        if let Err(e) = test_runner.run_category(TestCategory::PostBuild).await {
+            let _ = tx.send(AgentMessage::BuildUpdate {
+                project_name: project_name.to_string(),
+                event: BuildEvent::Failed(format!("Post-build smoke tests failed: {}", e)),
+            });
+            return Err(e);
+        }
+    }
+
+    // 4. Deploy using infrastructure-aware deployment
 
     if let Err(e) = deployment.deploy(config.as_ref()).await {
         let _ = tx.send(AgentMessage::BuildUpdate {

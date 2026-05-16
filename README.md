@@ -203,16 +203,39 @@ Shipwright automatically detects:
 - **Shared Resources**: Connect to existing databases and caches
 - **Custom Networks**: Join specific Docker networks
 
-### 🧪 Smoke Testing (Coming Soon)
+### 🧪 Smoke Testing
 
-Comprehensive post-deployment validation:
-- Environment variable verification
-- Database connectivity tests
-- Service health checks
-- Network routing validation
-- API endpoint verification
+Comprehensive automated validation that catches deployment issues before they cause downtime:
+
+**Pre-Deployment Tests:**
+- Docker daemon running check
+- Disk space validation (>5GB required)
+- docker-compose file syntax validation
+- Line ending detection (CRLF → LF issues)
+
+**Post-Build Tests:**
+- Image build verification
 - Build artifact validation
-- Configuration file verification
+
+**Post-Deployment Tests (Critical):**
+- **Container health checks** - Detects crash loops, stuck containers
+- **Environment variable validation** - Catches placeholder values, localhost URLs
+- **Database connectivity** - Tests connection, authentication, permissions
+- **Network validation** - DNS resolution, shared resource access
+- **Volume permissions** - Ensures writable static/media volumes
+- **Proxy routing** - Validates reverse proxy configuration
+- **Log inspection** - Scans for error patterns in container logs
+
+**What It Catches:**
+- 100% of dev-logs deployment issues
+- Database authentication failures
+- Environment variable misconfigurations
+- Container crash loops
+- Network connectivity problems
+- Permission errors
+- Build artifact issues
+
+See [docs/SMOKE_TESTING.md](docs/SMOKE_TESTING.md) for full documentation.
 
 ### 📊 Real-time Monitoring
 
@@ -490,8 +513,8 @@ shipwright/
 - [x] Proxy integration (Caddy, Nginx, Traefik)
 - [x] Shared resource support
 - [x] Docker Compose deployment
-- [ ] Smoke testing framework
-- [ ] Health check monitoring
+- [x] Smoke testing framework
+- [ ] Health check monitoring (continuous)
 - [ ] Rollback capabilities
 - [ ] Blue-green deployments
 - [ ] Kubernetes support

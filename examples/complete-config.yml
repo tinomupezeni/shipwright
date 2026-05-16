@@ -1,0 +1,145 @@
+# Complete Shipwright Configuration Example
+# This file demonstrates all available configuration options
+
+version: 1
+
+project:
+  name: myapp
+  framework: django  # django, nodejs, rails, react-vite, etc.
+
+build:
+  # Docker Compose deployment
+  compose_file: infra/docker-compose.deploy.yml
+
+  # Services to build (optional - omit to build all)
+  services:
+    - backend
+    - frontend
+
+  # Environment variables (auto-creates .env if not exists)
+  environment:
+    # Database
+    POSTGRES_USER: myapp
+    POSTGRES_PASSWORD: secure_password_here
+    POSTGRES_DB: myapp_production
+
+    # Django
+    DJANGO_SECRET_KEY: your-secret-key-change-in-production
+    DJANGO_DEBUG: "False"
+    DJANGO_ALLOWED_HOSTS: myapp.com,api.myapp.com
+
+    # Shared Resources
+    REDIS_URL: redis://shared-redis:6379/0
+    CELERY_BROKER_URL: redis://shared-redis:6379/1
+    DATABASE_URL: postgres://myapp:secure_password_here@shared-postgres:5432/myapp_production
+
+deploy:
+  type: docker-compose
+  replicas: 1
+
+  vps:
+    host: your-server.com
+    user: deploy
+    ssh_key: ~/.ssh/id_ed25519
+    domain: myapp.com  # Default domain
+    acme_email: admin@myapp.com  # For Let's Encrypt
+
+    # Service routing configuration
+    services:
+      - name: myapp-frontend
+        domain: myapp.com
+        port: 80
+        expose: true
+
+      - name: myapp-api
+        domain: api.myapp.com
+        port: 8000
+        expose: true
+
+      - name: myapp-admin
+        domain: admin.myapp.com
+        port: 80
+        expose: true
+
+  # Health check configuration
+  health:
+    http:
+      path: /health/
+      expect: 200
+      timeout: 30s
+
+infrastructure:
+  # Deployment strategy
+  strategy: compose  # auto, standalone, compose, or hybrid
+
+  # Auto-detect existing infrastructure
+  auto_detect: true
+
+  # Deploy directory (optional - auto-detected if not specified)
+  deploy_dir: /home/deploy/apps/myapp
+
+  # Reverse proxy configuration
+  proxy:
+    type: caddy  # caddy, nginx, traefik, or none
+    container_name: caddy-proxy
+    auto_update: true
+    reload_command: "caddy reload --config /etc/caddy/Caddyfile"
+
+  # Docker networks to join
+  networks:
+    - proxy-tier
+    - shared-internal
+
+  # Shared resources configuration
+  shared_resources:
+    postgres:
+      host: shared-postgres
+      port: 5432
+      database: myapp_production
+      user: myapp
+      network: shared-internal
+
+    redis:
+      host: shared-redis
+      port: 6379
+      db: 0
+      network: shared-internal
+
+# Smoke tests configuration
+smoke_tests:
+  # Enable smoke tests
+  enabled: true
+
+  # Fail deployment on critical test failures
+  fail_on_error: true
+
+  # Test categories to run
+  categories:
+    - pre_deployment   # Before build starts
+    - post_build       # After build completes
+    - post_deployment  # After containers start
+    # - integration    # Optional integration tests (slower)
+
+  # Disable specific tests (optional)
+  disabled_tests:
+    # - check_volume_permissions
+    # - validate_proxy_routing
+
+  # Test-specific configuration (optional)
+  test_config:
+    test_database_connectivity:
+      enabled: true
+      timeout: "30s"
+      retries: 3
+
+    check_containers_running:
+      enabled: true
+      timeout: "60s"
+
+# Notifications (optional)
+notifications:
+  slack:
+    webhook: ${SLACK_WEBHOOK_URL}
+    on:
+      - failure
+      - success

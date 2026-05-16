@@ -2350,6 +2350,7 @@ dependencies = [
  "bollard",
  "chrono",
  "flate2",
+ "futures",
  "futures-util",
  "refinery",
  "rusqlite",

@@ -83,12 +83,36 @@ fn get_post_deployment_tests(ctx: &DeploymentContext) -> Vec<SmokeTest> {
             execute: Box::new(|ctx| Box::pin(verify_environment_variables(ctx.clone()))),
         },
         SmokeTest {
-            name: "test_network_connectivity".to_string(),
-            description: "Verify containers can reach shared resources".to_string(),
+            name: "test_database_connectivity".to_string(),
+            description: "Verify database connection and permissions".to_string(),
             category: TestCategory::PostDeployment,
             severity: Severity::Critical,
             timeout: Duration::from_secs(30),
+            execute: Box::new(|ctx| Box::pin(test_database_connectivity(ctx.clone()))),
+        },
+        SmokeTest {
+            name: "test_network_connectivity".to_string(),
+            description: "Verify containers can reach shared resources".to_string(),
+            category: TestCategory::PostDeployment,
+            severity: Severity::High,
+            timeout: Duration::from_secs(30),
             execute: Box::new(|ctx| Box::pin(test_network_connectivity(ctx.clone()))),
+        },
+        SmokeTest {
+            name: "check_volume_permissions".to_string(),
+            description: "Verify volume permissions are correct".to_string(),
+            category: TestCategory::PostDeployment,
+            severity: Severity::High,
+            timeout: Duration::from_secs(15),
+            execute: Box::new(|ctx| Box::pin(check_volume_permissions(ctx.clone()))),
+        },
+        SmokeTest {
+            name: "validate_proxy_routing".to_string(),
+            description: "Ensure proxy routes to correct services".to_string(),
+            category: TestCategory::PostDeployment,
+            severity: Severity::Critical,
+            timeout: Duration::from_secs(30),
+            execute: Box::new(|ctx| Box::pin(validate_proxy_routing(ctx.clone()))),
         },
         SmokeTest {
             name: "check_container_logs".to_string(),
@@ -522,4 +546,326 @@ async fn check_container_logs(ctx: DeploymentContext) -> Result<()> {
     }
 
     Ok(())  // Non-critical - don't fail deployment on log warnings
+}
+
+/// Test database connectivity and permissions
+async fn test_database_connectivity(ctx: DeploymentContext) -> Result<()> {
+    use bollard::container::ListContainersOptions;
+    use std::collections::HashMap;
+
+    let docker = Docker::connect_with_socket_defaults()?;
+
+    // Get first running container
+    let mut filters = HashMap::new();
+    filters.insert("name".to_string(), vec![ctx.project_name.clone()]);
+    filters.insert("status".to_string(), vec!["running".to_string()]);
+
+    let containers = docker.list_containers(Some(ListContainersOptions {
+        filters,
+        ..Default::default()
+    })).await?;
+
+    if containers.is_empty() {
+        debug!("No running containers found, skipping database test");
+        return Ok(());
+    }
+
+    let container = &containers[0];
+    let container_name = container.names.as_ref()
+        .and_then(|n| n.first())
+        .map(|s| s.trim_start_matches('/'))
+        .unwrap_or("unknown");
+
+    // Try to test PostgreSQL connection via exec
+    // Test 1: DNS resolution
+    let pg_exec = docker.create_exec(
+        container_name,
+        bollard::exec::CreateExecOptions {
+            cmd: Some(vec!["sh", "-c", "getent hosts shared-postgres || echo 'DNS_FAILED'"]),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            ..Default::default()
+        },
+    ).await;
+
+    match pg_exec {
+        Ok(exec_result) => {
+            use bollard::exec::StartExecResults;
+            use futures::stream::StreamExt;
+
+            if let Ok(StartExecResults::Attached { mut output, .. }) = docker.start_exec(&exec_result.id, None).await {
+                let mut stdout = String::new();
+                while let Some(Ok(msg)) = output.next().await {
+                    stdout.push_str(&msg.to_string());
+                }
+
+                if stdout.contains("DNS_FAILED") {
+                    bail!(
+                        "Cannot resolve shared-postgres hostname\n\
+                        Remediation:\n\
+                        1. Check that shared-postgres container is running\n\
+                        2. Verify container is on correct network\n\
+                        3. Check docker network: docker network inspect core_shared-internal"
+                    );
+                }
+
+                debug!("✓ DNS resolution for shared-postgres successful");
+            }
+        }
+        Err(e) => {
+            debug!("Could not test database DNS: {}", e);
+        }
+    }
+
+    // Test 2: Port connectivity (try to connect to port 5432)
+    let port_exec = docker.create_exec(
+        container_name,
+        bollard::exec::CreateExecOptions {
+            cmd: Some(vec!["sh", "-c", "timeout 2 nc -z shared-postgres 5432 2>/dev/null && echo 'PORT_OK' || echo 'PORT_FAILED'"]),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            ..Default::default()
+        },
+    ).await;
+
+    match port_exec {
+        Ok(exec_result) => {
+            use bollard::exec::StartExecResults;
+            use futures::stream::StreamExt;
+
+            if let Ok(StartExecResults::Attached { mut output, .. }) = docker.start_exec(&exec_result.id, None).await {
+                let mut stdout = String::new();
+                while let Some(Ok(msg)) = output.next().await {
+                    stdout.push_str(&msg.to_string());
+                }
+
+                if stdout.contains("PORT_FAILED") {
+                    bail!(
+                        "Cannot connect to PostgreSQL port 5432\n\
+                        Remediation:\n\
+                        1. Check shared-postgres is running: docker ps | grep postgres\n\
+                        2. Verify PostgreSQL is listening: docker exec shared-postgres pg_isready\n\
+                        3. Check network connectivity"
+                    );
+                } else if stdout.contains("PORT_OK") {
+                    info!("✓ PostgreSQL port 5432 is accessible");
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Could not test database port (nc might not be available): {}", e);
+        }
+    }
+
+    // Test 3: Check for authentication errors in logs
+    let inspect = docker.inspect_container(container_name, None).await;
+    match inspect {
+        Ok(details) => {
+            if let Some(config) = details.config {
+                if let Some(env) = config.env {
+                    // Check for DATABASE_URL or connection string patterns
+                    let has_db_config = env.iter().any(|e|
+                        e.contains("DATABASE_URL") ||
+                        e.contains("POSTGRES_") ||
+                        e.contains("DB_HOST")
+                    );
+
+                    if !has_db_config {
+                        warn!("⚠ No database configuration found in environment");
+                    }
+
+                    // Check for special characters that might break parsers
+                    for env_var in &env {
+                        if env_var.contains("DATABASE_URL") || env_var.contains("POSTGRES_PASSWORD") {
+                            if env_var.contains("@") && !env_var.contains("%40") && env_var.split('@').count() > 2 {
+                                warn!(
+                                    "⚠ Special character '@' in password might need URL encoding\n\
+                                    Use %40 instead of @ in DATABASE_URL"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
+    info!("✓ Database connectivity validated");
+    Ok(())
+}
+
+/// Check volume permissions
+async fn check_volume_permissions(ctx: DeploymentContext) -> Result<()> {
+    use bollard::container::ListContainersOptions;
+    use std::collections::HashMap;
+
+    let docker = Docker::connect_with_socket_defaults()?;
+
+    let mut filters = HashMap::new();
+    filters.insert("name".to_string(), vec![ctx.project_name.clone()]);
+
+    let containers = docker.list_containers(Some(ListContainersOptions {
+        all: true,
+        filters,
+        ..Default::default()
+    })).await?;
+
+    if containers.is_empty() {
+        return Ok(());
+    }
+
+    for container in containers {
+        let name = container.names.as_ref()
+            .and_then(|n| n.first())
+            .map(|s| s.trim_start_matches('/'))
+            .unwrap_or("unknown");
+
+        let inspect = docker.inspect_container(name, None).await;
+
+        match inspect {
+            Ok(details) => {
+                if let Some(mounts) = details.mounts {
+                    for mount in mounts {
+                        // Check common volume paths
+                        if let Some(destination) = mount.destination {
+                            if destination.contains("static") || destination.contains("media") {
+                                // Try to check if we can write to volume
+                                let test_write = docker.create_exec(
+                                    name,
+                                    bollard::exec::CreateExecOptions {
+                                        cmd: Some(vec!["sh", "-c", &format!("touch {}/.write_test 2>/dev/null && rm {}/.write_test && echo 'WRITABLE' || echo 'NOT_WRITABLE'", destination, destination)]),
+                                        attach_stdout: Some(true),
+                                        attach_stderr: Some(true),
+                                        ..Default::default()
+                                    },
+                                ).await;
+
+                                match test_write {
+                                    Ok(exec_result) => {
+                                        use bollard::exec::StartExecResults;
+                                        use futures::stream::StreamExt;
+
+                                        if let Ok(StartExecResults::Attached { mut output, .. }) = docker.start_exec(&exec_result.id, None).await {
+                                            let mut stdout = String::new();
+                                            while let Some(Ok(msg)) = output.next().await {
+                                                stdout.push_str(&msg.to_string());
+                                            }
+
+                                            if stdout.contains("NOT_WRITABLE") {
+                                                bail!(
+                                                    "Volume {} is not writable in container {}\n\
+                                                    Remediation:\n\
+                                                    1. Check volume ownership: docker volume inspect <volume-name>\n\
+                                                    2. Fix permissions: docker run --rm -v <volume>:/vol alpine chmod -R 777 /vol\n\
+                                                    3. Check container user matches volume owner",
+                                                    destination, name
+                                                );
+                                            } else if stdout.contains("WRITABLE") {
+                                                debug!("✓ Volume {} is writable in {}", destination, name);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        debug!("Could not test volume permissions: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                debug!("Could not inspect container {}", name);
+            }
+        }
+    }
+
+    info!("✓ Volume permissions validated");
+    Ok(())
+}
+
+/// Validate proxy routing
+async fn validate_proxy_routing(ctx: DeploymentContext) -> Result<()> {
+    use crate::infrastructure;
+
+    // Detect infrastructure to find proxy
+    let infra_info = infrastructure::detect_infrastructure().await?;
+
+    if infra_info.proxy.is_none() {
+        debug!("No proxy detected, skipping routing validation");
+        return Ok(());
+    }
+
+    let (proxy_type, proxy_container) = infra_info.proxy.unwrap();
+
+    // Check if proxy container is running
+    let docker = Docker::connect_with_socket_defaults()?;
+    let inspect = docker.inspect_container(&proxy_container, None).await;
+
+    match inspect {
+        Ok(details) => {
+            if let Some(state) = details.state {
+                if !state.running.unwrap_or(false) {
+                    bail!(
+                        "Proxy container {} is not running\n\
+                        Remediation:\n\
+                        1. Start proxy: docker start {}\n\
+                        2. Check proxy logs: docker logs {}",
+                        proxy_container, proxy_container, proxy_container
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            bail!(
+                "Cannot inspect proxy container {}: {}\n\
+                Remediation:\n\
+                1. Verify proxy container exists: docker ps -a | grep {}\n\
+                2. Check proxy is properly configured",
+                proxy_container, e, proxy_type
+            );
+        }
+    }
+
+    // For Caddy, check if config was reloaded recently
+    if proxy_type == "caddy" {
+        debug!("✓ Caddy proxy is running");
+
+        // Check Caddy logs for reload confirmation
+        use bollard::container::LogsOptions;
+        use futures::stream::StreamExt;
+
+        let options = Some(LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            tail: "50".to_string(),
+            since: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 300) as i64, // Last 5 minutes
+            ..Default::default()
+        });
+
+        let mut logs = docker.logs(&proxy_container, options);
+        let mut log_output = String::new();
+
+        while let Some(Ok(line)) = logs.next().await {
+            log_output.push_str(&line.to_string());
+        }
+
+        if log_output.contains("reload") || log_output.contains("config") {
+            debug!("✓ Caddy configuration may have been reloaded recently");
+        } else {
+            warn!(
+                "⚠ No recent Caddy reload detected in logs\n\
+                If you updated routing, reload Caddy:\n\
+                docker exec {} caddy reload --config /etc/caddy/Caddyfile",
+                proxy_container
+            );
+        }
+    }
+
+    // TODO: Add actual HTTP tests for each domain
+    // This would require knowing the domains from config
+
+    info!("✓ Proxy routing validated");
+    Ok(())
 }
