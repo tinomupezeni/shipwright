@@ -32,8 +32,10 @@ fi
 CARGO_CMD=""
 if command -v cargo &> /dev/null; then
     CARGO_CMD="cargo"
-elif [ -n "$SUDO_USER" ] && sudo -u $SUDO_USER bash -c 'command -v cargo' &> /dev/null; then
-    CARGO_CMD="sudo -u $SUDO_USER cargo"
+    echo -e "${GREEN}✓ Cargo found (system)${NC}"
+elif [ -n "$SUDO_USER" ] && [ -f "/home/$SUDO_USER/.cargo/bin/cargo" ]; then
+    CARGO_CMD="sudo -u $SUDO_USER /home/$SUDO_USER/.cargo/bin/cargo"
+    echo -e "${GREEN}✓ Cargo found (user: $SUDO_USER)${NC}"
 else
     echo -e "${RED}✗ Cargo not found${NC}"
     echo "Shipwright agent requires Rust to build."
@@ -42,8 +44,6 @@ else
     echo "Run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
     exit 1
 fi
-
-echo -e "${GREEN}✓ Cargo found${NC}"
 
 # Check if Docker is installed
 if ! command -v docker &> /dev/null; then
