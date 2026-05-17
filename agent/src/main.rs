@@ -92,6 +92,9 @@ async fn main() -> anyhow::Result<()> {
     // Channel for broadcasting build events to all connected WebSocket clients
     let (tx, _rx) = broadcast::channel::<AgentMessage>(100);
 
+    // Message buffer for replaying recent events to new WebSocket clients
+    let message_buffer = websocket::message_buffer::MessageBuffer::new();
+
     // Check if running in Docker
     let is_docker = std::path::Path::new("/.dockerenv").exists();
 
@@ -151,12 +154,24 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db: Arc::clone(&conn),
         broadcast_tx: tx.clone(),
+        message_buffer: message_buffer.clone(),
     };
+
+    // Task to buffer broadcast messages for replay
+    let buffer_rx = tx.subscribe();
+    let buffer_clone = message_buffer.clone();
+    tokio::spawn(async move {
+        let mut rx = buffer_rx;
+        while let Ok(msg) = rx.recv().await {
+            buffer_clone.push(msg);
+        }
+    });
 
     let ws_addr_clone = ws_addr.clone();
     let ws_tx = tx.clone();
+    let ws_buffer = message_buffer.clone();
     let ws_handle = tokio::spawn(async move {
-        websocket::server::start_server(&ws_addr_clone, ws_tx).await
+        websocket::server::start_server(&ws_addr_clone, ws_tx, ws_buffer).await
     });
 
     let http_addr_clone = http_addr.clone();

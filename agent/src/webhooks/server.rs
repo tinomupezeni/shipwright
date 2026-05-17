@@ -51,6 +51,7 @@ pub struct ProjectRegistration {
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub broadcast_tx: tokio::sync::broadcast::Sender<shipwright_common::protocol::AgentMessage>,
+    pub message_buffer: crate::websocket::message_buffer::MessageBuffer,
 }
 
 pub async fn start_server(addr: &str, state: AppState) -> anyhow::Result<()> {
