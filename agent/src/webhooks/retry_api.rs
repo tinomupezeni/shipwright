@@ -9,7 +9,7 @@ use crate::pipeline::build::run_pipeline;
 
 #[derive(Debug, Deserialize)]
 pub struct RetryRequest {
-    pub project_id: String,
+    pub project_id: String,  // Actually project_name from CLI
 }
 
 #[derive(Debug, Serialize)]
@@ -46,8 +46,8 @@ pub async fn retry_deployment(
 
     let tracker = DeploymentTracker::new(state.db.clone());
 
-    // Get the last deployment attempt
-    let last_attempt = match tracker.get_latest_attempt(&req.project_id) {
+    // Get the last deployment attempt (req.project_id is actually project_name from CLI)
+    let last_attempt = match tracker.get_latest_attempt_by_name(&req.project_id) {
         Ok(Some(attempt)) => attempt,
         Ok(None) => {
             return (
@@ -155,7 +155,8 @@ pub async fn get_deployment_status(
 ) -> (StatusCode, Json<StatusResponse>) {
     let tracker = DeploymentTracker::new(state.db.clone());
 
-    match tracker.get_latest_attempt(&req.project_id) {
+    // req.project_id is actually project_name from CLI
+    match tracker.get_latest_attempt_by_name(&req.project_id) {
         Ok(Some(attempt)) => {
             let status_str = match attempt.status {
                 DeploymentStatus::Pending => "pending",

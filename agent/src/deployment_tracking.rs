@@ -157,7 +157,7 @@ impl DeploymentTracker {
         Ok(())
     }
 
-    /// Get the latest deployment attempt for a project
+    /// Get the latest deployment attempt for a project by project_id (UUID)
     pub fn get_latest_attempt(&self, project_id: &str) -> Result<Option<DeploymentAttempt>> {
         let conn = self.conn.lock().unwrap();
 
@@ -172,6 +172,44 @@ impl DeploymentTracker {
         )?;
 
         match stmt.query_row(params![project_id], |row| {
+            Ok(DeploymentAttempt {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                project_name: row.get(2)?,
+                commit_sha: row.get(3)?,
+                deploy_dir: row.get(4)?,
+                config_path: row.get(5)?,
+                triggered_by: row.get(6)?,
+                status: DeploymentStatus::from_string(&row.get::<_, String>(7)?),
+                started_at: row.get(8)?,
+                completed_at: row.get(9)?,
+                failure_reason: row.get(10)?,
+                failure_details: row.get(11)?,
+                retry_count: row.get(12)?,
+                original_attempt_id: row.get(13)?,
+            })
+        }) {
+            Ok(attempt) => Ok(Some(attempt)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get the latest deployment attempt for a project by project_name
+    pub fn get_latest_attempt_by_name(&self, project_name: &str) -> Result<Option<DeploymentAttempt>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, project_name, commit_sha, deploy_dir, config_path,
+                    triggered_by, status, started_at, completed_at, failure_reason,
+                    failure_details, retry_count, original_attempt_id
+             FROM deployment_attempts
+             WHERE project_name = ?1
+             ORDER BY started_at DESC
+             LIMIT 1"
+        )?;
+
+        match stmt.query_row(params![project_name], |row| {
             Ok(DeploymentAttempt {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
