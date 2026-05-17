@@ -112,7 +112,7 @@ impl DeploymentTracker {
                 attempt.retry_count,
                 &attempt.original_attempt_id,
             ],
-        ).context("Failed to create deployment attempt")?;
+        ).map_err(|e| anyhow::anyhow!("Failed to create deployment attempt - SQL error: {} - attempt_id: {}, project: {}", e, attempt.id, project_name))?;
 
         Ok(attempt)
     }
