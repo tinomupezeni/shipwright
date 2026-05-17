@@ -109,6 +109,7 @@ pub async fn retry_deployment(
     };
 
     // Spawn the retry deployment in background
+    let project_id = retry_attempt.project_id.clone();
     let project_name = retry_attempt.project_name.clone();
     let deploy_dir = retry_attempt.deploy_dir.clone();
     let attempt_id = retry_attempt.id.clone();
@@ -122,6 +123,7 @@ pub async fn retry_deployment(
         // Note: This will use the EXISTING code in deploy_dir (no git pull)
         // run_pipeline handles all deployment tracking
         if let Err(e) = run_pipeline(
+            &project_id,
             &project_name,
             &deploy_dir,
             tx_clone,

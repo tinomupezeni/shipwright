@@ -47,7 +47,12 @@
       "Bash(start cmd /k \"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe watch\")",
       "Bash(timeout 60 tail:*)",
       "Bash(where:*)",
-      "Bash(timeout 300 shipwright watch:*)"
+      "Bash(timeout 300 shipwright watch:*)",
+      "Bash(ping:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(for name in \"TESE-MARKET---BFF-ARCHITECTURE\" \"tese-marketplace\")",
+      "Bash(do echo \"Checking $name:\")",
+      "Bash(done)"
     ]
   }
 }

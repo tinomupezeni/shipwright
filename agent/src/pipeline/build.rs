@@ -35,6 +35,7 @@ async fn get_commit_sha(build_dir: &Path) -> Result<String> {
 }
 
 pub async fn run_pipeline(
+    project_id: &str,
     project_name: &str,
     repo_url_or_dir: &str,
     tx: broadcast::Sender<AgentMessage>,
@@ -75,7 +76,7 @@ pub async fn run_pipeline(
         // Webhook case: create new attempt
         let config_path = build_dir.join(".shipwright.yml");
         tracker.create_attempt(
-            project_name,
+            project_id,
             project_name,
             &commit_sha,
             &build_dir.to_string_lossy(),

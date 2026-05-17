@@ -183,16 +183,16 @@ async fn handle_github_webhook(
     let repo_url = payload.repository.clone_url.clone();
 
     // Get project details from database
-    let project_info: Option<(String, String)> = {
+    let project_info: Option<(String, String, String)> = {
         let db = state.db.lock().unwrap();
         db.query_row(
-            "SELECT webhook_secret, deploy_branch FROM projects WHERE name = ?1",
+            "SELECT id, webhook_secret, deploy_branch FROM projects WHERE name = ?1",
             [&project_name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).ok()
     };
 
-    let (webhook_secret, deploy_branch) = match project_info {
+    let (project_id, webhook_secret, deploy_branch) = match project_info {
         Some(info) => info,
         None => {
             warn!("Project {} not registered. Skipping.", project_name);
@@ -239,9 +239,11 @@ async fn handle_github_webhook(
 
         let tx = state.broadcast_tx.clone();
         let db = state.db.clone();
+        let project_id_clone = project_id.clone();
         // Spawn the pipeline in the background
         tokio::spawn(async move {
             if let Err(e) = crate::pipeline::build::run_pipeline(
+                &project_id_clone,
                 &project_name,
                 &repo_url,
                 tx,
