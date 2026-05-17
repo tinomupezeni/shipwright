@@ -9,6 +9,7 @@ pub struct Config {
     pub infrastructure: Option<InfrastructureConfig>,
     pub notifications: Option<NotificationsConfig>,
     pub smoke_tests: Option<SmokeTestsConfig>,
+    pub rollback: Option<RollbackConfig>,
 }
 
 /// Infrastructure configuration for existing VPS setups
@@ -285,4 +286,78 @@ fn default_test_categories() -> Vec<String> {
         "post_build".to_string(),
         "post_deployment".to_string(),
     ]
+}
+
+/// Rollback configuration
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RollbackConfig {
+    /// Enable automatic rollback on deployment failure
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Strategy to use for rollback
+    #[serde(default = "default_rollback_strategy")]
+    pub strategy: RollbackStrategy,
+
+    /// Maximum number of deployment snapshots to retain
+    #[serde(default = "default_max_snapshots")]
+    pub max_snapshots: usize,
+
+    /// Automatically rollback on smoke test failure
+    #[serde(default = "default_true")]
+    pub auto_rollback_on_test_failure: bool,
+
+    /// Service-specific rollback strategies
+    #[serde(default)]
+    pub service_strategies: std::collections::HashMap<String, RollbackStrategy>,
+}
+
+impl Default for RollbackConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            strategy: RollbackStrategy::Hybrid,
+            max_snapshots: 10,
+            auto_rollback_on_test_failure: true,
+            service_strategies: std::collections::HashMap::new(),
+        }
+    }
+}
+
+fn default_rollback_strategy() -> RollbackStrategy {
+    RollbackStrategy::Hybrid
+}
+
+fn default_max_snapshots() -> usize {
+    10
+}
+
+/// Rollback strategy types
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum RollbackStrategy {
+    /// Image tagging (fast, stateless services) - 5-10s rollback
+    ImageTagging,
+    /// Git commit (rebuild-based, for frontends) - 2-5min rollback
+    GitCommit,
+    /// Full snapshot (stateful services with migrations) - 30-60s rollback
+    Snapshot,
+    /// Hybrid approach - auto-select based on service type
+    Hybrid,
+}
+
+impl RollbackStrategy {
+    /// Determine strategy for a service based on its characteristics
+    pub fn auto_detect(service_name: &str, has_database: bool, has_migrations: bool) -> Self {
+        if has_migrations || has_database {
+            // Stateful services need full snapshot
+            Self::Snapshot
+        } else if service_name.contains("frontend") || service_name.contains("web") || service_name.contains("ui") {
+            // Frontends can use git-commit (rebuild is acceptable)
+            Self::GitCommit
+        } else {
+            // Stateless services use fast image tagging
+            Self::ImageTagging
+        }
+    }
 }

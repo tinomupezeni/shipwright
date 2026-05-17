@@ -53,7 +53,7 @@ pub async fn run_pipeline(
     use crate::smoke_tests::{SmokeTestRunner, SmokeTestConfig, TestCategory};
 
     let build_dir_str = build_dir.to_string_lossy().to_string();
-    let deployment = DeploymentContext::new(project_name, &build_dir_str, config.as_ref()).await?;
+    let deployment = DeploymentContext::new(project_name, &build_dir_str, config.as_ref(), Some(tx.clone())).await?;
 
     let smoke_config = if let Some(cfg) = &config {
         if let Some(st_config) = &cfg.smoke_tests {

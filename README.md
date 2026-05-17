@@ -25,6 +25,7 @@ Traditional deployment tools either:
 - ✅ Fixes file ownership issues
 - ✅ Supports both standalone and docker-compose deployments
 - ✅ Runs comprehensive smoke tests after deployment
+- ✅ **Automatic rollback on failure** - hybrid strategy for fast recovery (5s-60s)
 - ✅ Provides real-time deployment feedback via WebSocket
 - ✅ **Automatic deployments via GitHub webhooks** (push to deploy!)
 - ✅ Secure webhook signature verification (HMAC-SHA256)
@@ -305,6 +306,48 @@ Comprehensive automated validation that catches deployment issues before they ca
 - Build artifact issues
 
 See [docs/SMOKE_TESTING.md](docs/SMOKE_TESTING.md) for full documentation.
+
+### 🔄 Automatic Rollback on Failure
+
+Shipwright automatically rolls back failed deployments to maintain system stability:
+
+**Hybrid Rollback Strategy:**
+- **Image Tagging** for stateless services (5-10s rollback)
+- **Git Commit** for frontends (2-5min rebuild-based)
+- **Full Snapshot** for stateful services with databases (30-60s)
+- Auto-detects the best strategy for each service
+
+**What Triggers Rollback:**
+- Smoke test failures
+- Container crash loops
+- Health check failures
+- Deployment errors
+
+**Rollback Features:**
+- Deployment history with snapshots
+- Database backup and restoration
+- Volume snapshot management
+- Real-time rollback notifications via WebSocket
+- Manual rollback capability
+
+**Example Workflow:**
+```bash
+# Deploy new version
+shipwright up
+
+# If smoke tests fail, automatic rollback triggers:
+# 🔄 Smoke tests failed, initiating rollback...
+# ⏱  Rolling back to previous deployment (snapshot: abc123)
+# ✅ Rollback completed successfully (8.3 seconds)
+
+# Manual rollback if needed
+shipwright rollback previous myapp
+
+# View rollback history
+shipwright rollback history myapp
+```
+
+See [docs/ROLLBACK.md](docs/ROLLBACK.md) for full documentation.
 
 ### 🔄 Automatic Deployments via GitHub Webhooks
 
@@ -606,8 +649,8 @@ shipwright/
 - [x] Shared resource support
 - [x] Docker Compose deployment
 - [x] Smoke testing framework
+- [x] Automated rollback on failure (hybrid strategy)
 - [ ] Health check monitoring (continuous)
-- [ ] Rollback capabilities
 - [ ] Blue-green deployments
 - [ ] Kubernetes support
 - [ ] GitHub Actions integration

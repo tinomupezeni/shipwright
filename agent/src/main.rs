@@ -8,6 +8,7 @@ mod smoke_tests;
 mod env_validator;
 mod crypto;
 mod secrets;
+mod rollback;
 
 use tracing_subscriber;
 use std::sync::{Arc, Mutex};

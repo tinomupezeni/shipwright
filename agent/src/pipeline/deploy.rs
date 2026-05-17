@@ -1,6 +1,6 @@
 use anyhow::{Result, Context};
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 use std::path::Path;
 use crate::infrastructure::{InfrastructureInfo, detect_infrastructure};
 use crate::infrastructure::adapters::{RouteConfig, create_adapter};
@@ -20,29 +20,61 @@ pub enum DeployStrategy {
 pub struct DeploymentContext {
     pub project_name: String,
     pub build_dir: String,
+    pub deploy_dir: String,
+    pub commit_sha: Option<String>,
     pub strategy: DeployStrategy,
     pub infrastructure: InfrastructureInfo,
+    pub broadcast_tx: Option<tokio::sync::broadcast::Sender<shipwright_common::protocol::AgentMessage>>,
 }
 
 impl DeploymentContext {
-    pub async fn new(project_name: &str, build_dir: &str, config: Option<&Config>) -> Result<Self> {
+    pub async fn new(
+        project_name: &str,
+        build_dir: &str,
+        config: Option<&Config>,
+        broadcast_tx: Option<tokio::sync::broadcast::Sender<shipwright_common::protocol::AgentMessage>>,
+    ) -> Result<Self> {
         // Detect existing infrastructure
         let infrastructure = detect_infrastructure().await?;
 
         // Determine strategy
         let strategy = determine_strategy(&infrastructure, build_dir, config).await?;
 
+        // Extract commit SHA if available
+        let commit_sha = Self::get_commit_sha(build_dir).ok();
+
+        // Determine deploy directory
+        let deploy_dir = build_dir.to_string();
+
         Ok(Self {
             project_name: project_name.to_string(),
             build_dir: build_dir.to_string(),
+            deploy_dir,
+            commit_sha,
             strategy,
             infrastructure,
+            broadcast_tx,
         })
+    }
+
+    fn get_commit_sha(dir: &str) -> Result<String> {
+        let output = std::process::Command::new("git")
+            .args(&["rev-parse", "HEAD"])
+            .current_dir(dir)
+            .output()
+            .context("Failed to get git commit")?;
+
+        if !output.status.success() {
+            anyhow::bail!("Git rev-parse failed");
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     /// Execute deployment based on strategy
     pub async fn deploy(&self, config: Option<&Config>) -> Result<()> {
         use crate::smoke_tests::{SmokeTestRunner, SmokeTestConfig, TestCategory};
+        use crate::rollback::{RollbackManager, RollbackReason};
 
         // Configure smoke tests
         let smoke_config = if let Some(cfg) = config {
@@ -66,6 +98,64 @@ impl DeploymentContext {
             SmokeTestConfig::default()
         };
 
+        // Configure rollback
+        let rollback_config = if let Some(cfg) = config {
+            cfg.rollback.clone().unwrap_or_default()
+        } else {
+            shipwright_common::config::RollbackConfig::default()
+        };
+
+        // Initialize rollback manager
+        let rollback_manager = if rollback_config.enabled {
+            Some(RollbackManager::new("/var/lib/shipwright/shipwright-agent.db")?)
+        } else {
+            None
+        };
+
+        // Create snapshot before deployment (if rollback is enabled)
+        let snapshot = if let Some(ref manager) = rollback_manager {
+            info!("📸 Creating deployment snapshot...");
+            let strategy = rollback_config.strategy.clone();
+
+            // Notify snapshot creation started
+            if let Some(ref tx) = self.broadcast_tx {
+                let strategy_str = format!("{:?}", strategy);
+                let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                    project_name: self.project_name.clone(),
+                    event: shipwright_common::protocol::RollbackEvent::SnapshotStarted {
+                        snapshot_id: "pending".to_string(),
+                        strategy: strategy_str.clone(),
+                    },
+                });
+            }
+
+            match manager.create_snapshot(self, strategy.clone()).await {
+                Ok(s) => {
+                    info!("✅ Snapshot created: {}", s.id);
+
+                    // Notify snapshot created
+                    if let Some(ref tx) = self.broadcast_tx {
+                        let strategy_str = format!("{:?}", strategy);
+                        let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                            project_name: self.project_name.clone(),
+                            event: shipwright_common::protocol::RollbackEvent::SnapshotCreated {
+                                snapshot_id: s.id.clone(),
+                                strategy: strategy_str,
+                            },
+                        });
+                    }
+
+                    Some(s)
+                }
+                Err(e) => {
+                    warn!("⚠️  Failed to create snapshot: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Run pre-deployment smoke tests
         if smoke_config.enabled {
             info!("🧪 Running pre-deployment smoke tests...");
@@ -74,10 +164,70 @@ impl DeploymentContext {
         }
 
         // Execute deployment
-        match &self.strategy {
-            DeployStrategy::Standalone => self.deploy_standalone().await?,
-            DeployStrategy::Compose { file } => self.deploy_compose(file).await?,
-            DeployStrategy::Hybrid => self.deploy_hybrid().await?,
+        let deployment_result = async {
+            match &self.strategy {
+                DeployStrategy::Standalone => self.deploy_standalone().await,
+                DeployStrategy::Compose { file } => self.deploy_compose(file).await,
+                DeployStrategy::Hybrid => self.deploy_hybrid().await,
+            }
+        }.await;
+
+        if let Err(e) = deployment_result {
+            // Deployment failed - attempt rollback if enabled
+            if let Some(ref manager) = rollback_manager {
+                if rollback_config.auto_rollback_on_test_failure {
+                    warn!("🔄 Deployment failed, initiating rollback...");
+
+                    // Notify rollback started
+                    if let Some(ref tx) = self.broadcast_tx {
+                        let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                            project_name: self.project_name.clone(),
+                            event: shipwright_common::protocol::RollbackEvent::RollbackStarted {
+                                from_snapshot_id: "current".to_string(),
+                                to_snapshot_id: "previous".to_string(),
+                                reason: "deployment_failure".to_string(),
+                            },
+                        });
+                    }
+
+                    let rollback_start = std::time::Instant::now();
+                    match manager.rollback_to_previous(
+                        &self.project_name,
+                        RollbackReason::Manual,
+                        "auto"
+                    ).await {
+                        Ok(_) => {
+                            info!("✅ Rollback completed successfully");
+                            let duration_secs = rollback_start.elapsed().as_secs();
+
+                            // Notify rollback success
+                            if let Some(ref tx) = self.broadcast_tx {
+                                let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                    project_name: self.project_name.clone(),
+                                    event: shipwright_common::protocol::RollbackEvent::RollbackSuccess {
+                                        snapshot_id: "previous".to_string(),
+                                        duration_secs,
+                                    },
+                                });
+                            }
+                        }
+                        Err(rollback_err) => {
+                            error!("❌ Rollback failed: {}", rollback_err);
+
+                            // Notify rollback failure
+                            if let Some(ref tx) = self.broadcast_tx {
+                                let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                    project_name: self.project_name.clone(),
+                                    event: shipwright_common::protocol::RollbackEvent::RollbackFailed {
+                                        error: format!("{}", rollback_err),
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            return Err(e);
         }
 
         // Update proxy configuration if needed
@@ -89,17 +239,140 @@ impl DeploymentContext {
         if smoke_config.enabled {
             info!("🧪 Running post-deployment smoke tests...");
             let mut test_runner = SmokeTestRunner::new(self.clone(), smoke_config.clone());
-            test_runner.run_category(TestCategory::PostDeployment).await?;
 
-            let report = test_runner.generate_report();
-            info!("\n{}", report);
+            match test_runner.run_category(TestCategory::PostDeployment).await {
+                Ok(_) => {
+                    let report = test_runner.generate_report();
+                    info!("\n{}", report);
 
-            if report.has_critical_failures() && smoke_config.fail_on_error {
-                return Err(anyhow::anyhow!("🚨 Deployment failed smoke tests - {} critical failure(s)", report.critical_failures));
+                    if report.has_critical_failures() && smoke_config.fail_on_error {
+                        // Smoke tests failed - attempt rollback if enabled
+                        if let Some(ref manager) = rollback_manager {
+                            if rollback_config.auto_rollback_on_test_failure {
+                                warn!("🔄 Smoke tests failed, initiating rollback...");
+
+                                // Notify rollback started
+                                if let Some(ref tx) = self.broadcast_tx {
+                                    let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                        project_name: self.project_name.clone(),
+                                        event: shipwright_common::protocol::RollbackEvent::RollbackStarted {
+                                            from_snapshot_id: "current".to_string(),
+                                            to_snapshot_id: "previous".to_string(),
+                                            reason: "smoke_test_failure".to_string(),
+                                        },
+                                    });
+                                }
+
+                                let rollback_start = std::time::Instant::now();
+                                match manager.rollback_to_previous(
+                                    &self.project_name,
+                                    RollbackReason::SmokeTestFailure,
+                                    "auto"
+                                ).await {
+                                    Ok(_) => {
+                                        info!("✅ Rollback completed successfully");
+                                        let duration_secs = rollback_start.elapsed().as_secs();
+
+                                        // Notify rollback success
+                                        if let Some(ref tx) = self.broadcast_tx {
+                                            let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                                project_name: self.project_name.clone(),
+                                                event: shipwright_common::protocol::RollbackEvent::RollbackSuccess {
+                                                    snapshot_id: "previous".to_string(),
+                                                    duration_secs,
+                                                },
+                                            });
+                                        }
+                                    }
+                                    Err(rollback_err) => {
+                                        error!("❌ Rollback failed: {}", rollback_err);
+
+                                        // Notify rollback failure
+                                        if let Some(ref tx) = self.broadcast_tx {
+                                            let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                                project_name: self.project_name.clone(),
+                                                event: shipwright_common::protocol::RollbackEvent::RollbackFailed {
+                                                    error: format!("{}", rollback_err),
+                                                },
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Err(anyhow::anyhow!("🚨 Deployment failed smoke tests - {} critical failure(s)", report.critical_failures));
+                    }
+
+                    if report.warnings > 0 {
+                        warn!("⚠️  Deployment completed with {} warning(s) - review logs", report.warnings);
+                    }
+                }
+                Err(e) => {
+                    // Test execution failed - attempt rollback if enabled
+                    if let Some(ref manager) = rollback_manager {
+                        if rollback_config.auto_rollback_on_test_failure {
+                            warn!("🔄 Test execution failed, initiating rollback...");
+
+                            // Notify rollback started
+                            if let Some(ref tx) = self.broadcast_tx {
+                                let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                    project_name: self.project_name.clone(),
+                                    event: shipwright_common::protocol::RollbackEvent::RollbackStarted {
+                                        from_snapshot_id: "current".to_string(),
+                                        to_snapshot_id: "previous".to_string(),
+                                        reason: "test_execution_failure".to_string(),
+                                    },
+                                });
+                            }
+
+                            let rollback_start = std::time::Instant::now();
+                            match manager.rollback_to_previous(
+                                &self.project_name,
+                                RollbackReason::SmokeTestFailure,
+                                "auto"
+                            ).await {
+                                Ok(_) => {
+                                    info!("✅ Rollback completed successfully");
+                                    let duration_secs = rollback_start.elapsed().as_secs();
+
+                                    // Notify rollback success
+                                    if let Some(ref tx) = self.broadcast_tx {
+                                        let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                            project_name: self.project_name.clone(),
+                                            event: shipwright_common::protocol::RollbackEvent::RollbackSuccess {
+                                                snapshot_id: "previous".to_string(),
+                                                duration_secs,
+                                            },
+                                        });
+                                    }
+                                }
+                                Err(rollback_err) => {
+                                    error!("❌ Rollback failed: {}", rollback_err);
+
+                                    // Notify rollback failure
+                                    if let Some(ref tx) = self.broadcast_tx {
+                                        let _ = tx.send(shipwright_common::protocol::AgentMessage::RollbackUpdate {
+                                            project_name: self.project_name.clone(),
+                                            event: shipwright_common::protocol::RollbackEvent::RollbackFailed {
+                                                error: format!("{}", rollback_err),
+                                            },
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return Err(e);
+                }
             }
+        }
 
-            if report.warnings > 0 {
-                warn!("⚠️  Deployment completed with {} warning(s) - review logs", report.warnings);
+        // Mark snapshot as successful if rollback is enabled
+        if let Some(s) = snapshot {
+            if let Some(ref _manager) = rollback_manager {
+                // Snapshot is already marked as active and smoke test results
+                // can be updated in storage if needed
+                info!("✅ Deployment successful - snapshot {} available for rollback", s.id);
             }
         }
 

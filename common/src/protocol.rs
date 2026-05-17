@@ -31,6 +31,11 @@ pub enum AgentMessage {
         project_name: String,
         event: BuildEvent,
     },
+    /// Rollback status update
+    RollbackUpdate {
+        project_name: String,
+        event: RollbackEvent,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -39,6 +44,37 @@ pub enum BuildEvent {
     Log(String),
     Success,
     Failed(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum RollbackEvent {
+    /// Snapshot creation started
+    SnapshotStarted {
+        snapshot_id: String,
+        strategy: String,
+    },
+    /// Snapshot created successfully
+    SnapshotCreated {
+        snapshot_id: String,
+        strategy: String,
+    },
+    /// Rollback initiated
+    RollbackStarted {
+        from_snapshot_id: String,
+        to_snapshot_id: String,
+        reason: String,
+    },
+    /// Rollback progress update
+    RollbackProgress(String),
+    /// Rollback completed successfully
+    RollbackSuccess {
+        snapshot_id: String,
+        duration_secs: u64,
+    },
+    /// Rollback failed
+    RollbackFailed {
+        error: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
