@@ -292,12 +292,55 @@ async fn build_project(
 
 /// Ensure .env file exists for docker-compose
 async fn ensure_env_file(build_dir: &Path, compose_file: &str, config: Option<&shipwright_common::config::Config>) -> Result<()> {
+    use std::collections::HashMap;
+
     // Determine .env file location based on compose file location
     let compose_path = build_dir.join(compose_file);
     let compose_dir = compose_path.parent().unwrap_or(build_dir);
     let env_file = compose_dir.join(".env");
 
-    // If .env already exists, we're good
+    // If config has environment variables, merge them into .env
+    if let Some(cfg) = config {
+        if let Some(config_vars) = &cfg.build.environment {
+            if !config_vars.is_empty() {
+                // Read existing .env if it exists
+                let mut env_vars = HashMap::new();
+
+                if env_file.exists() {
+                    let existing_content = tokio::fs::read_to_string(&env_file).await?;
+                    for line in existing_content.lines() {
+                        let line = line.trim();
+                        if line.is_empty() || line.starts_with('#') {
+                            continue;
+                        }
+                        if let Some(eq_pos) = line.find('=') {
+                            let key = line[..eq_pos].trim().to_string();
+                            let value = line[eq_pos + 1..].trim().to_string();
+                            env_vars.insert(key, value);
+                        }
+                    }
+                    info!("✓ Found existing .env file at {}", env_file.display());
+                }
+
+                // Merge config variables (config takes precedence)
+                for (key, value) in config_vars.iter() {
+                    env_vars.insert(key.clone(), value.clone());
+                }
+
+                // Write merged env file
+                let env_content = env_vars.iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                tokio::fs::write(&env_file, env_content).await?;
+                info!("✓ Merged {} environment variables from config into .env", config_vars.len());
+                return Ok(());
+            }
+        }
+    }
+
+    // If .env already exists and no config vars, we're good
     if env_file.exists() {
         info!("✓ Found existing .env file at {}", env_file.display());
         return Ok(());
@@ -405,6 +448,12 @@ async fn build_with_compose(
 ) -> Result<()> {
     // Ensure .env file exists
     ensure_env_file(build_dir, compose_file, config).await?;
+
+    // Validate environment variables
+    let validation_report = crate::env_validator::validate_env_vars(build_dir, compose_file).await?;
+    if !validation_report.is_valid() {
+        anyhow::bail!("{}", validation_report.error_message());
+    }
 
     // Fix ownership if running as root
     fix_ownership(build_dir).await?;

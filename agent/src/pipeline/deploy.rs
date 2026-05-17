@@ -176,6 +176,16 @@ impl DeploymentContext {
     async fn deploy_compose(&self, compose_file: &str) -> Result<()> {
         info!("📦 Deploying with docker-compose: {}", compose_file);
 
+        // Validate environment variables before deployment
+        let validation_report = crate::env_validator::validate_env_vars(
+            Path::new(&self.build_dir),
+            compose_file
+        ).await?;
+
+        if !validation_report.is_valid() {
+            anyhow::bail!("{}", validation_report.error_message());
+        }
+
         let output = Command::new("docker-compose")
             .arg("-f")
             .arg(compose_file)

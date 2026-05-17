@@ -5,6 +5,9 @@ mod webhooks;
 mod pipeline;
 mod infrastructure;
 mod smoke_tests;
+mod env_validator;
+mod crypto;
+mod secrets;
 
 use tracing_subscriber;
 use std::sync::{Arc, Mutex};
@@ -13,21 +16,12 @@ use crate::webhooks::server::AppState;
 use tokio::sync::broadcast;
 use shipwright_common::protocol::AgentMessage;
 
-use std::net::TcpListener;
 use std::fs;
 
-fn find_available_port(start_port: u16) -> u16 {
-    let mut port = start_port;
-    loop {
-        if TcpListener::bind(format!("0.0.0.0:{}", port)).is_ok() {
-            return port;
-        }
-        port += 1;
-        if port > start_port + 100 {
-            panic!("Could not find an available port in range {}-{}", start_port, start_port + 100);
-        }
-    }
-}
+// Fixed ports for Shipwright Agent
+// Chosen to avoid conflicts with common web development ports (3000-9999)
+const SHIPWRIGHT_WS_PORT: u16 = 17671;
+const SHIPWRIGHT_HTTP_PORT: u16 = 17670;
 
 fn open_firewall_port(port: u16) {
     info!("🛡️  Opening port {} in firewall...", port);
@@ -99,28 +93,31 @@ async fn main() -> anyhow::Result<()> {
     // Check if running in Docker
     let is_docker = std::path::Path::new("/.dockerenv").exists();
 
-    // Port Configuration - use env vars if set (Docker mode), otherwise dynamic discovery
+    // Port Configuration - use env vars if set (for testing), otherwise use fixed ports
     let ws_port = std::env::var("SHIPWRIGHT_WS_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or_else(|| {
-            if is_docker {
-                8081 // Default Docker port
-            } else {
-                find_available_port(8081)
-            }
-        });
+        .unwrap_or(SHIPWRIGHT_WS_PORT);
 
     let http_port = std::env::var("SHIPWRIGHT_HTTP_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or_else(|| {
-            if is_docker {
-                8084 // Default Docker port
-            } else {
-                find_available_port(8083)
-            }
-        });
+        .unwrap_or(SHIPWRIGHT_HTTP_PORT);
+
+    // Verify ports are available before proceeding
+    if std::net::TcpListener::bind(format!("0.0.0.0:{}", ws_port)).is_err() {
+        error!("❌ Port {} is already in use!", ws_port);
+        error!("   Shipwright Agent requires port {} for WebSocket connections.", ws_port);
+        error!("   Please free this port or set SHIPWRIGHT_WS_PORT environment variable to use a different port.");
+        anyhow::bail!("Port {} unavailable", ws_port);
+    }
+
+    if std::net::TcpListener::bind(format!("0.0.0.0:{}", http_port)).is_err() {
+        error!("❌ Port {} is already in use!", http_port);
+        error!("   Shipwright Agent requires port {} for HTTP webhook connections.", http_port);
+        error!("   Please free this port or set SHIPWRIGHT_HTTP_PORT environment variable to use a different port.");
+        anyhow::bail!("Port {} unavailable", http_port);
+    }
 
     let ws_addr = format!("0.0.0.0:{}", ws_port);
     let http_addr = format!("0.0.0.0:{}", http_port);

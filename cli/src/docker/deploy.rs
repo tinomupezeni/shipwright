@@ -150,15 +150,23 @@ fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Conf
     info!("Deploying with docker-compose to {}...", vps.host);
 
     // Determine remote directory
-    let remote_dir = format!("/home/{}/{}", vps.user, config.project.name);
+    let remote_dir = format!("/home/{}/apps/{}", vps.user, config.project.name);
 
-    // 1. Find the compose file (check multiple naming conventions)
-    let compose_file = find_compose_file()?;
+    // 1. Get compose file from config or find it
+    let compose_file = config.build.compose_file.clone().unwrap_or_else(|| find_compose_file().unwrap());
     println!("📄 Found compose file: {}", compose_file);
 
-    // 2. Check and prompt for missing environment variables
-    let env_file = ensure_env_file(&compose_file)?;
-    println!("📄 Using env file: {}", env_file);
+    // 2. Check for .env file - skip if doesn't exist locally (may be on VPS already)
+    let env_file = match ensure_env_file_optional(&compose_file) {
+        Some(f) => {
+            println!("📄 Using local env file: {}", f);
+            Some(f)
+        }
+        None => {
+            println!("📄 No local .env file (using existing VPS .env)");
+            None
+        }
+    };
 
     // 3. Check and prompt for missing volume files
     ensure_volume_files(&compose_file)?;
@@ -170,15 +178,21 @@ fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Conf
     // 4. Upload docker-compose file
     upload_file(vps, &compose_file, &format!("{}/docker-compose.yml", remote_dir))?;
 
-    // 5. Upload .env file
-    println!("📄 Uploading .env file...");
-    upload_file(vps, &env_file, &format!("{}/.env", remote_dir))?;
+    // 5. Upload .env file if we have one locally
+    if let Some(ref env_file_path) = env_file {
+        println!("📄 Uploading .env file...");
+        upload_file(vps, env_file_path, &format!("{}/.env", remote_dir))?;
+    }
 
     // 6. Upload volume-mounted files (detected from compose file)
     upload_volume_files(vps, &compose_file, &remote_dir)?;
 
     // 7. Check for custom images and build/push if missing
-    let env_vars = parse_env_file(&env_file);
+    let env_vars = if let Some(ref env_file_path) = env_file {
+        parse_env_file(env_file_path)
+    } else {
+        HashMap::new()
+    };
     let compose_content = fs::read_to_string(&compose_file)?;
     let custom_images = extract_custom_images(&compose_content, &env_vars);
 
@@ -436,6 +450,18 @@ fn parse_env_file(path: &str) -> HashMap<String, String> {
     }
 
     env_vars
+}
+
+/// Optional .env file - returns None if doesn't exist locally (assumes it's on VPS)
+fn ensure_env_file_optional(compose_file: &str) -> Option<String> {
+    // Check for existing .env files
+    if fs::metadata(".env").is_ok() {
+        Some(".env".to_string())
+    } else if fs::metadata(".env.production").is_ok() {
+        Some(".env.production".to_string())
+    } else {
+        None
+    }
 }
 
 /// Ensure .env file exists with all required variables, prompting user for missing ones

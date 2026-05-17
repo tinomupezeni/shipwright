@@ -7,6 +7,9 @@ use futures_util::StreamExt;
 use shipwright_common::protocol::{AgentMessage, BuildEvent};
 use tracing::error;
 
+// Fixed WebSocket port - must match agent/src/main.rs
+const SHIPWRIGHT_WS_PORT: u16 = 17671;
+
 pub async fn run() -> Result<()> {
     let config_path = Path::new(".shipwright.yml");
     if !config_path.exists() {
@@ -15,11 +18,11 @@ pub async fn run() -> Result<()> {
 
     let config_content = fs::read_to_string(config_path)?;
     let config: Config = serde_yaml::from_str(&config_content)?;
-    
-    let vps = config.deploy.vps.as_ref().context("No VPS configured in .shipwright.yml")?;
-    let url = format!("ws://{}:8081", vps.host);
 
-    println!("👀 Watching for build events from {}...", vps.host);
+    let vps = config.deploy.vps.as_ref().context("No VPS configured in .shipwright.yml")?;
+    let url = format!("ws://{}:{}", vps.host, SHIPWRIGHT_WS_PORT);
+
+    println!("👀 Watching for build events from {}:{}...", vps.host, SHIPWRIGHT_WS_PORT);
     
     let (ws_stream, _) = connect_async(&url).await.context("Failed to connect to agent")?;
     let (_, mut ws_receiver) = ws_stream.split();

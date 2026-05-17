@@ -41,6 +41,52 @@ enum Commands {
     Register,
     /// Watch live build logs from the VPS
     Watch,
+    /// Update the Shipwright Agent on the VPS
+    UpdateAgent,
+    /// Manage secrets for deployments
+    Secrets {
+        #[command(subcommand)]
+        action: SecretsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretsAction {
+    /// Set a secret value
+    Set {
+        /// Secret name
+        name: Option<String>,
+        /// Secret value (will prompt if not provided)
+        #[arg(short, long)]
+        value: Option<String>,
+        /// Tags for organizing secrets
+        #[arg(short, long)]
+        tags: Vec<String>,
+    },
+    /// Get a secret value
+    Get {
+        /// Secret name
+        name: String,
+        /// Show the actual value (default: hidden)
+        #[arg(short, long)]
+        show: bool,
+    },
+    /// List all secrets
+    List {
+        /// Show secret values (default: names only)
+        #[arg(short = 'v', long)]
+        with_values: bool,
+    },
+    /// Delete a secret
+    Delete {
+        /// Secret name
+        name: String,
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Export secrets as .env format
+    Export,
 }
 
 #[derive(Subcommand)]
@@ -97,10 +143,32 @@ async fn main() -> Result<()> {
         Commands::Watch => {
             commands::watch::run().await?;
         }
+        Commands::UpdateAgent => {
+            commands::update_agent::run().await?;
+        }
         Commands::Hooks { action } => {
             match action {
                 HookAction::Install => {
                     commands::hooks::install().await?;
+                }
+            }
+        }
+        Commands::Secrets { action } => {
+            match action {
+                SecretsAction::Set { name, value, tags } => {
+                    commands::secrets::run_set(name.clone(), value.clone(), tags.clone()).await?;
+                }
+                SecretsAction::Get { name, show } => {
+                    commands::secrets::run_get(name.clone(), *show).await?;
+                }
+                SecretsAction::List { with_values } => {
+                    commands::secrets::run_list(*with_values).await?;
+                }
+                SecretsAction::Delete { name, force } => {
+                    commands::secrets::run_delete(name.clone(), *force).await?;
+                }
+                SecretsAction::Export => {
+                    commands::secrets::run_export().await?;
                 }
             }
         }

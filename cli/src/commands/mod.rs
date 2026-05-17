@@ -7,3 +7,5 @@ pub mod setup;
 pub mod hooks;
 pub mod register;
 pub mod watch;
+pub mod update_agent;
+pub mod secrets;

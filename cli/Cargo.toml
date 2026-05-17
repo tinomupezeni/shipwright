@@ -35,3 +35,4 @@ regex = "1.10"
 dialoguer = "0.11"
 serde_json = "1.0"
 once_cell = "1.19"
+chrono = { version = "=0.4.38", features = ["serde"], default-features = false }

@@ -6,24 +6,10 @@ use dialoguer::{Input, theme::ColorfulTheme};
 use octocrab::Octocrab;
 use serde_json::json;
 
-use crate::docker::deploy::execute_remote_command;
-
-async fn discover_agent_ports(vps: &shipwright_common::config::VpsConfig) -> Result<(u16, u16)> {
-    let output = execute_remote_command(vps, "cat /etc/shipwright/agent.env || cat agent.env")?;
-    
-    let mut ws_port = 8081;
-    let mut http_port = 8083;
-
-    for line in output.lines() {
-        if line.starts_with("SHIPWRIGHT_WS_PORT=") {
-            ws_port = line.replace("SHIPWRIGHT_WS_PORT=", "").parse()?;
-        } else if line.starts_with("SHIPWRIGHT_HTTP_PORT=") {
-            http_port = line.replace("SHIPWRIGHT_HTTP_PORT=", "").parse()?;
-        }
-    }
-
-    Ok((ws_port, http_port))
-}
+// Fixed ports for Shipwright Agent
+// Must match agent/src/main.rs constants
+const SHIPWRIGHT_WS_PORT: u16 = 17671;
+const SHIPWRIGHT_HTTP_PORT: u16 = 17670;
 
 pub async fn run() -> Result<()> {
     // 1. Read config
@@ -37,10 +23,9 @@ pub async fn run() -> Result<()> {
     
     let vps = config.deploy.vps.as_ref().context("No VPS configured in .shipwright.yml")?;
 
-    // 2. Discover Agent Ports
-    println!("🔍 Discovering Agent ports on {}...", vps.host);
-    let (_ws_port, http_port) = discover_agent_ports(vps).await?;
-    println!("📡 Agent found listening on port {}", http_port);
+    // 2. Use fixed Agent ports
+    println!("📡 Connecting to Shipwright Agent on {}:{}...", vps.host, SHIPWRIGHT_HTTP_PORT);
+    let http_port = SHIPWRIGHT_HTTP_PORT;
 
     // 3. Get GitHub info
     let git_remote = Command::new("git")

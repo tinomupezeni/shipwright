@@ -1,5 +1,5 @@
 use axum::{
-    routing::{get, post},
+    routing::{get, post, delete},
     Router,
     Json,
     extract::State,
@@ -7,6 +7,8 @@ use axum::{
     response::IntoResponse,
     body::Bytes,
 };
+
+use crate::webhooks::secrets_api;
 use serde::{Deserialize, Serialize};
 use tracing::{info, error, warn};
 use std::sync::{Arc, Mutex};
@@ -56,6 +58,12 @@ pub async fn start_server(addr: &str, state: AppState) -> anyhow::Result<()> {
         .route("/webhooks/github", post(handle_github_webhook))
         .route("/webhooks/shipwright", post(handle_self_update_webhook))
         .route("/projects", post(register_project))
+        // Secret Management API (SMP/v1)
+        .route("/api/v1/secrets", post(secrets_api::set_secret))
+        .route("/api/v1/secrets/list", post(secrets_api::list_secrets))
+        .route("/api/v1/secrets/all", post(secrets_api::get_all_secrets))
+        .route("/api/v1/secrets/:name", post(secrets_api::get_secret))
+        .route("/api/v1/secrets/:name/delete", post(secrets_api::delete_secret))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 

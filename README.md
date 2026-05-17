@@ -20,6 +20,7 @@ Traditional deployment tools either:
 - ✅ Deploys to existing directory structures (`~/apps`, `/opt/apps`)
 - ✅ Works with shared resources (PostgreSQL, Redis, Docker networks)
 - ✅ Never breaks existing projects
+- ✅ **Encrypted secret management** (AES-256-GCM) - no secrets in git!
 - ✅ Generates environment files automatically
 - ✅ Fixes file ownership issues
 - ✅ Supports both standalone and docker-compose deployments
@@ -244,6 +245,32 @@ Shipwright automatically detects:
 - **Proxy Integration**: Automatic reverse proxy configuration
 - **Shared Resources**: Connect to existing databases and caches
 - **Custom Networks**: Join specific Docker networks
+
+### 🔐 Secret Management
+
+Shipwright includes built-in encrypted secret storage - no more secrets in git!
+
+**Features:**
+- **AES-256-GCM Encryption**: Industry-standard encryption for all secret values
+- **CLI Management**: Set, get, list, and delete secrets from your local machine
+- **No SSH Required**: Manage secrets via secure REST API
+- **Audit Logging**: Track when secrets are created, updated, accessed, or deleted
+- **Easy Migration**: Export/import secrets between environments
+
+**Quick Example:**
+```bash
+# Set secrets
+shipwright secrets set DATABASE_PASSWORD
+shipwright secrets set JWT_SECRET --value "your-secret"
+
+# List secrets
+shipwright secrets list
+
+# Export for backup
+shipwright secrets export > backup.env
+```
+
+See [docs/SECRET_MANAGEMENT.md](docs/SECRET_MANAGEMENT.md) for full documentation.
 
 ### 🧪 Smoke Testing
 
