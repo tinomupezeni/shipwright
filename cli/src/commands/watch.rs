@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use tokio_tungstenite::connect_async;
 use futures_util::StreamExt;
-use shipwright_common::protocol::{AgentMessage, BuildEvent};
+use shipwright_common::protocol::{AgentMessage, BuildEvent, RollbackEvent};
 use tracing::error;
 
 // Fixed WebSocket port - must match agent/src/main.rs
@@ -49,6 +49,31 @@ pub async fn run() -> Result<()> {
                             }
                             BuildEvent::Failed(err) => {
                                 println!("❌ Build failed for {}: {}", project_name, err);
+                            }
+                        }
+                    }
+                    AgentMessage::RollbackUpdate { project_name, event } => {
+                        match event {
+                            RollbackEvent::SnapshotStarted { snapshot_id, strategy } => {
+                                println!("\n📸 Creating deployment snapshot for {} (strategy: {})...", project_name, strategy);
+                            }
+                            RollbackEvent::SnapshotCreated { snapshot_id, strategy } => {
+                                println!("✅ Snapshot created: {} (strategy: {})", snapshot_id, strategy);
+                            }
+                            RollbackEvent::RollbackStarted { from_snapshot_id, to_snapshot_id, reason } => {
+                                println!("\n🔄 Rollback initiated for {}", project_name);
+                                println!("   Reason: {}", reason);
+                                println!("   From: {} → To: {}", from_snapshot_id, to_snapshot_id);
+                            }
+                            RollbackEvent::RollbackProgress(msg) => {
+                                println!("  {}", msg);
+                            }
+                            RollbackEvent::RollbackSuccess { snapshot_id, duration_secs } => {
+                                println!("✅ Rollback completed successfully in {}s", duration_secs);
+                                println!("   Restored to snapshot: {}", snapshot_id);
+                            }
+                            RollbackEvent::RollbackFailed { error } => {
+                                println!("❌ Rollback failed: {}", error);
                             }
                         }
                     }

@@ -3,6 +3,8 @@ use bollard::Docker;
 use bollard::image::BuildImageOptions;
 use futures_util::stream::StreamExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use rusqlite::Connection;
 use tokio::process::Command;
 use tracing::{info, error, warn};
 use tar::Builder;
@@ -12,13 +14,36 @@ use tokio::sync::broadcast;
 use shipwright_common::protocol::{AgentMessage, BuildEvent};
 use crate::infrastructure::{detect_infrastructure, detector::recommend_deploy_dir};
 use crate::pipeline::deploy::DeploymentContext;
+use crate::deployment_tracking::{DeploymentTracker, DeploymentStatus};
+
+/// Get the current commit SHA from a git repository
+async fn get_commit_sha(build_dir: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("HEAD")
+        .current_dir(build_dir)
+        .output()
+        .await
+        .context("Failed to run git rev-parse")?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to get commit SHA: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(sha)
+}
 
 pub async fn run_pipeline(
     project_name: &str,
-    repo_url: &str,
-    tx: broadcast::Sender<AgentMessage>
-) -> Result<()> {
+    repo_url_or_dir: &str,
+    tx: broadcast::Sender<AgentMessage>,
+    db: Arc<Mutex<Connection>>,
+    attempt_id: Option<String>,
+) -> Result<String> {
     info!("Starting infrastructure-aware pipeline for project: {}", project_name);
+
+    let tracker = DeploymentTracker::new(db.clone());
 
     let _ = tx.send(AgentMessage::BuildUpdate {
         project_name: project_name.to_string(),
@@ -26,7 +51,7 @@ pub async fn run_pipeline(
     });
 
     // 1. Clone (infrastructure-aware)
-    let build_dir = match clone_repo(repo_url, project_name).await {
+    let build_dir = match clone_repo(repo_url_or_dir, project_name).await {
         Ok(dir) => dir,
         Err(e) => {
             let _ = tx.send(AgentMessage::BuildUpdate {
@@ -37,6 +62,33 @@ pub async fn run_pipeline(
         }
     };
 
+    // Get commit SHA
+    let commit_sha = get_commit_sha(&build_dir).await
+        .context("Failed to get commit SHA")?;
+
+    // Create or use existing deployment attempt
+    let attempt = if let Some(id) = attempt_id {
+        // Retry case: load existing attempt
+        tracker.get_attempt(&id)?
+            .context("Retry attempt not found")?
+    } else {
+        // Webhook case: create new attempt
+        let config_path = build_dir.join(".shipwright.yml");
+        tracker.create_attempt(
+            project_name,
+            project_name,
+            &commit_sha,
+            &build_dir.to_string_lossy(),
+            &config_path.to_string_lossy(),
+            "webhook",
+        )?
+    };
+
+    let attempt_id = attempt.id.clone();
+
+    // Update status to Running
+    tracker.update_status(&attempt_id, DeploymentStatus::Running)?;
+
     // 2. Load config if exists
     let config = load_config(&build_dir).await.ok();
 
@@ -46,6 +98,15 @@ pub async fn run_pipeline(
             project_name: project_name.to_string(),
             event: BuildEvent::Failed(format!("Build failed: {}", e)),
         });
+
+        // Mark deployment as failed
+        let _ = tracker.complete_attempt(
+            &attempt_id,
+            DeploymentStatus::Failed,
+            Some("Build failed".to_string()),
+            Some(format!("{:#}", e)),
+        );
+
         return Err(e);
     }
 
@@ -85,6 +146,15 @@ pub async fn run_pipeline(
                 project_name: project_name.to_string(),
                 event: BuildEvent::Failed(format!("Post-build smoke tests failed: {}", e)),
             });
+
+            // Mark deployment as failed
+            let _ = tracker.complete_attempt(
+                &attempt_id,
+                DeploymentStatus::Failed,
+                Some("Post-build smoke tests failed".to_string()),
+                Some(format!("{:#}", e)),
+            );
+
             return Err(e);
         }
     }
@@ -96,15 +166,32 @@ pub async fn run_pipeline(
             project_name: project_name.to_string(),
             event: BuildEvent::Failed(format!("Deploy failed: {}", e)),
         });
+
+        // Mark deployment as failed
+        let _ = tracker.complete_attempt(
+            &attempt_id,
+            DeploymentStatus::Failed,
+            Some("Deployment failed".to_string()),
+            Some(format!("{:#}", e)),
+        );
+
         return Err(e);
     }
+
+    // Mark deployment as successful
+    tracker.complete_attempt(
+        &attempt_id,
+        DeploymentStatus::Success,
+        None,
+        None,
+    )?;
 
     let _ = tx.send(AgentMessage::BuildUpdate {
         project_name: project_name.to_string(),
         event: BuildEvent::Success,
     });
 
-    Ok(())
+    Ok(attempt_id)
 }
 
 /// Convert HTTPS GitHub URL to SSH URL for authentication

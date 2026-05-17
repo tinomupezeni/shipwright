@@ -9,6 +9,7 @@ mod env_validator;
 mod crypto;
 mod secrets;
 mod rollback;
+mod deployment_tracking;
 
 use tracing_subscriber;
 use std::sync::{Arc, Mutex};

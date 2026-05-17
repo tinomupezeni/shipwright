@@ -53,10 +53,14 @@ impl ValidationReport {
         }
 
         msg.push_str(&format!("\n📝 Please update your .env file at: {}\n", self.env_file_path));
-        msg.push_str("\nYou can:\n");
-        msg.push_str("  1. Add the missing variables to your .env file\n");
-        msg.push_str("  2. Check .env.example for reference values\n");
-        msg.push_str("  3. Review your docker-compose file for required variables\n");
+        msg.push_str("\n🔧 To fix this issue:\n");
+        msg.push_str("  1. SSH to your VPS or update .env file remotely\n");
+        msg.push_str("  2. Add the missing variables to your .env file\n");
+        msg.push_str("  3. For sensitive values, use: shipwright secrets set <VAR_NAME>\n");
+        msg.push_str("  4. Check .env.example for reference values\n");
+        msg.push_str("\n🔄 After fixing:\n");
+        msg.push_str("  • Run 'shipwright retry' to retry this deployment\n");
+        msg.push_str("  • No need to push new code - retry uses existing code\n");
 
         msg
     }

@@ -9,6 +9,7 @@ use axum::{
 };
 
 use crate::webhooks::secrets_api;
+use crate::webhooks::retry_api;
 use serde::{Deserialize, Serialize};
 use tracing::{info, error, warn};
 use std::sync::{Arc, Mutex};
@@ -64,6 +65,9 @@ pub async fn start_server(addr: &str, state: AppState) -> anyhow::Result<()> {
         .route("/api/v1/secrets/all", post(secrets_api::get_all_secrets))
         .route("/api/v1/secrets/:name", post(secrets_api::get_secret))
         .route("/api/v1/secrets/:name/delete", post(secrets_api::delete_secret))
+        // Deployment retry API
+        .route("/api/v1/deployments/retry", post(retry_api::retry_deployment))
+        .route("/api/v1/deployments/status", post(retry_api::get_deployment_status))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
@@ -234,9 +238,16 @@ async fn handle_github_webhook(
         info!("🚀 Triggering deployment for {} at commit {} ({})", project_name, &commit.id[..7], commit.message);
 
         let tx = state.broadcast_tx.clone();
+        let db = state.db.clone();
         // Spawn the pipeline in the background
         tokio::spawn(async move {
-            if let Err(e) = crate::pipeline::build::run_pipeline(&project_name, &repo_url, tx).await {
+            if let Err(e) = crate::pipeline::build::run_pipeline(
+                &project_name,
+                &repo_url,
+                tx,
+                db,
+                None,  // New webhook deployment
+            ).await {
                 error!("Pipeline failed for {}: {}", project_name, e);
             }
         });

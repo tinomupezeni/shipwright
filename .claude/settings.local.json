@@ -40,7 +40,14 @@
       "Bash(\"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe\" secrets list --with-values)",
       "Bash(\"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe\" secrets export)",
       "Bash(\"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe\" --help)",
-      "Bash(\"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe\" up)"
+      "Bash(\"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe\" up)",
+      "Bash(\"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe\" register)",
+      "Bash(powershell -Command \"Test-NetConnection -ComputerName 159.198.42.231 -Port 17671\")",
+      "Bash(timeout 30:*)",
+      "Bash(start cmd /k \"C:\\\\Users\\\\Dell\\\\Documents\\\\projects\\\\shipwright\\\\target\\\\release\\\\shipwright.exe watch\")",
+      "Bash(timeout 60 tail:*)",
+      "Bash(where:*)",
+      "Bash(timeout 300 shipwright watch:*)"
     ]
   }
 }

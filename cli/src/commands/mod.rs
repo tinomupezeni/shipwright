@@ -9,3 +9,5 @@ pub mod register;
 pub mod watch;
 pub mod update_agent;
 pub mod secrets;
+pub mod version;
+pub mod retry;

@@ -48,6 +48,10 @@ enum Commands {
         #[command(subcommand)]
         action: SecretsAction,
     },
+    /// Retry the last failed deployment
+    Retry,
+    /// Show version information
+    Version,
 }
 
 #[derive(Subcommand)]
@@ -171,6 +175,12 @@ async fn main() -> Result<()> {
                     commands::secrets::run_export().await?;
                 }
             }
+        }
+        Commands::Retry => {
+            commands::retry::run().await?;
+        }
+        Commands::Version => {
+            commands::version::run();
         }
     }
 
