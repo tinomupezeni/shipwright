@@ -116,7 +116,10 @@ async fn main() -> Result<()> {
     if let Ok(config_content) = fs::read_to_string(".shipwright.yml") {
         if let Ok(config) = serde_yaml::from_str::<Config>(&config_content) {
             if let Some(vps) = &config.deploy.vps {
-                let url = format!("ws://{}:8081", vps.host);
+                // Use fixed Agent port (17671)
+                // This must match agent/src/main.rs SHIPWRIGHT_WS_PORT
+                let ws_port = 17671;
+                let url = format!("ws://{}:{}", vps.host, ws_port);
                 let conn_clone = Arc::clone(&conn);
                 tokio::spawn(async move {
                     let _ = websocket::client::connect_to_agent(&url, conn_clone).await;

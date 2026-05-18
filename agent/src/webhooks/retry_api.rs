@@ -5,7 +5,6 @@ use tracing::{info, error};
 
 use super::server::AppState;
 use crate::deployment_tracking::{DeploymentTracker, DeploymentStatus};
-use crate::pipeline::build::run_pipeline;
 
 #[derive(Debug, Deserialize)]
 pub struct RetryRequest {
@@ -108,29 +107,27 @@ pub async fn retry_deployment(
         }
     };
 
-    // Spawn the retry deployment in background
-    let project_id = retry_attempt.project_id.clone();
-    let project_name = retry_attempt.project_name.clone();
-    let deploy_dir = retry_attempt.deploy_dir.clone();
-    let attempt_id = retry_attempt.id.clone();
-    let db_clone = state.db.clone();
+    // Prepare clones for background task
+    let attempt_id_clone = retry_attempt.id.clone();
+    let project_name_clone = retry_attempt.project_name.clone();
+    let deploy_dir_clone = retry_attempt.deploy_dir.clone();
     let tx_clone = state.broadcast_tx.clone();
+    let db_clone = state.db.clone();
 
+    // Spawn the deployment in the background
     tokio::spawn(async move {
-        info!("Starting retry deployment for {}", project_name);
+        info!("Starting retry deployment for {}", project_name_clone);
 
         // Run the deployment pipeline with existing attempt
-        // Note: This will use the EXISTING code in deploy_dir (no git pull)
-        // run_pipeline handles all deployment tracking
-        if let Err(e) = run_pipeline(
-            &project_id,
-            &project_name,
-            &deploy_dir,
+        if let Err(e) = crate::pipeline::build::run_pipeline(
+            &attempt_id_clone,
+            &project_name_clone,
+            &deploy_dir_clone,
             tx_clone,
             db_clone,
-            Some(attempt_id),  // Use existing retry attempt
+            None,
         ).await {
-            error!("Retry deployment failed for {}: {}", project_name, e);
+            error!("Retry deployment failed for {}: {}", project_name_clone, e);
         }
     });
 

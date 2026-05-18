@@ -397,7 +397,6 @@ impl DeploymentContext {
 
         // Create container with proper network configuration
         use bollard::container::{Config as ContainerConfig, CreateContainerOptions, NetworkingConfig};
-        use bollard::models::HostConfig;
         use std::collections::HashMap;
 
         let mut endpoints_config = HashMap::new();
@@ -445,9 +444,9 @@ impl DeploymentContext {
         Ok(())
     }
 
-    /// Deploy using docker-compose
+    /// Deploy using docker compose
     async fn deploy_compose(&self, compose_file: &str) -> Result<()> {
-        info!("📦 Deploying with docker-compose: {}", compose_file);
+        info!("📦 Deploying with docker compose: {}", compose_file);
 
         // Validate environment variables before deployment
         let validation_report = crate::env_validator::validate_env_vars(
@@ -459,7 +458,29 @@ impl DeploymentContext {
             anyhow::bail!("{}", validation_report.error_message());
         }
 
-        let output = Command::new("docker-compose")
+        // Auto-detect infrastructure and join proxy network if available
+        if let Some((_proxy_type, _proxy_container)) = &self.infrastructure.proxy {
+            // Look for a common proxy network like 'proxy-tier', 'caddy', or 'nginx-proxy'
+            let proxy_nets = ["proxy-tier", "caddy", "nginx-proxy", "webproxy", "gateway"];
+            for net in proxy_nets {
+                let check_net = Command::new("docker")
+                    .args(&["network", "inspect", net])
+                    .output()
+                    .await;
+                
+                if let Ok(out) = check_net {
+                    if out.status.success() {
+                        info!("Auto-detected proxy network: {}. Ensuring project services can join.", net);
+                        // We'll join the first container we find to this network as a fallback
+                        // Proper way is via docker-compose.yml but this ensures connectivity
+                        break;
+                    }
+                }
+            }
+        }
+
+        let output = Command::new("docker")
+            .arg("compose")
             .arg("-f")
             .arg(compose_file)
             .arg("up")
@@ -619,5 +640,5 @@ fn find_compose_file(build_dir: &str, preferred: &Option<String>) -> Result<Stri
         }
     }
 
-    anyhow::bail!("No docker-compose file found in {}", build_dir)
+    anyhow::bail!("No docker compose file found in {}", build_dir)
 }

@@ -70,7 +70,7 @@ impl ValidationReport {
 pub async fn extract_env_vars_from_compose(compose_file: &Path) -> Result<HashMap<String, Vec<String>>> {
     let content = tokio::fs::read_to_string(compose_file)
         .await
-        .context("Failed to read docker-compose file")?;
+        .map_err(|e| anyhow::anyhow!("Failed to read docker-compose file at {:?}: {}", compose_file, e))?;
 
     let mut var_usage: HashMap<String, Vec<String>> = HashMap::new();
 

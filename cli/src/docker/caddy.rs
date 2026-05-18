@@ -343,20 +343,20 @@ import sites/*
     if caddy_check.map(|s| s.trim() == "missing").unwrap_or(true) {
         println!("   Installing Caddy...");
 
-        // Install Caddy step by step
+        // Install Caddy step by step with non-interactive flags
         super::deploy::execute_sudo_command(vps, "apt-get update -qq")?;
-        super::deploy::execute_sudo_command(vps, "apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl")?;
+        super::deploy::execute_sudo_command(vps, "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl")?;
 
         // Add Caddy repository
         super::deploy::execute_sudo_command(vps,
-            "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+            "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes"
         )?;
 
         super::deploy::execute_sudo_command(vps,
-            "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list"
+            "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null"
         )?;
 
-        super::deploy::execute_sudo_command(vps, "apt-get update -qq && apt-get install -y -qq caddy")?;
+        super::deploy::execute_sudo_command(vps, "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq caddy")?;
     }
 
     // Step 4: Enable and start Caddy

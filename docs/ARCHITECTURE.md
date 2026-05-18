@@ -18,17 +18,17 @@ This document describes the technical architecture of Shipwright, a VPS deployme
 ## Overview
 
 Shipwright is designed as a **client-server architecture** where:
-- **Agent** runs on the VPS as a systemd service
+- **Agent** runs on the VPS as a systemd service (managed as root for orchestration)
 - **CLI** runs on developer's local machine
 - Communication happens via REST API and WebSocket
 
 ### Design Principles
 
-1. **Infrastructure-Aware**: Auto-detect and adapt to existing setups
-2. **Non-Destructive**: Never break existing deployments
-3. **Convention over Configuration**: Smart defaults with override options
-4. **Real-time Feedback**: Live deployment progress via WebSocket
-5. **Fail-Safe**: Validate before executing, rollback on failure
+1. **Zero-Conf "Push-to-Deploy"**: Achieving parity with PaaS platforms like Render.
+2. **Infrastructure-Aware**: Auto-detect and adapt to existing setups.
+3. **Integrated Lifecycle**: Build and Deploy are one atomic unit.
+4. **Self-Healing**: Automated smoke tests trigger instant rollbacks.
+5. **Modern Native**: Built on Docker Compose V2 for maximum reliability.
 
 ## System Architecture
 
@@ -39,10 +39,10 @@ Shipwright is designed as a **client-server architecture** where:
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │                    Shipwright CLI                           │ │
 │  │                                                              │ │
-│  │  - Register projects                                        │ │
+│  │  - Register projects (Zero-Conf)                            │ │
 │  │  - Trigger deployments                                      │ │
 │  │  - Stream logs (WebSocket)                                  │ │
-│  │  - Manage configurations                                    │ │
+│  │  - Manage configurations & secrets                          │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                              │                                    │
 └──────────────────────────────│────────────────────────────────────┘
@@ -63,15 +63,15 @@ Shipwright is designed as a **client-server architecture** where:
 │  │                        │                                     │ │
 │  │                        ▼                                     │ │
 │  │  ┌────────────────────────────────────────────────────────┐│ │
-│  │  │            Pipeline Orchestrator                        ││ │
+│  │  │            Unified Pipeline Orchestrator               ││ │
 │  │  │                                                          ││ │
 │  │  │  1. Infrastructure Detection                            ││ │
-│  │  │  2. Repository Cloning                                  ││ │
-│  │  │  3. Environment Setup                                   ││ │
-│  │  │  4. Docker Build                                        ││ │
-│  │  │  5. Deployment                                          ││ │
-│  │  │  6. Smoke Tests                                         ││ │
-│  │  │  7. Proxy Configuration                                 ││ │
+│  │  │  2. Git Trust & Repository Cloning                      ││ │
+│  │  │  3. Environment Validation                              ││ │
+│  │  │  4. Docker Compose V2 Build                             ││ │
+│  │  │  5. Smoke Tests (Pre/Post)                              ││ │
+│  │  │  6. Atomic Deployment & Proxy Join                      ││ │
+│  │  │  7. Auto-Rollback Engine                                ││ │
 │  │  └────────────────────────────────────────────────────────┘│ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                              │                                    │

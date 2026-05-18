@@ -70,9 +70,15 @@ impl RollbackStrategyImpl for SnapshotStrategy {
         let snapshot_path = snapshot.snapshot_path.as_ref()
             .context("No snapshot path found")?;
 
+        // Detect infrastructure to find where the project is currently located
+        let infrastructure = crate::infrastructure::detect_infrastructure().await?;
+        let deploy_dir = crate::infrastructure::detector::recommend_deploy_dir(&infrastructure, &snapshot.project_id);
+
+        info!("Using deployment directory: {}", deploy_dir);
+
         // Stop containers
         info!("Stopping containers for project {}", snapshot.project_id);
-        self.stop_project_containers(&snapshot.project_id).await?;
+        self.stop_project_containers(&deploy_dir).await?;
 
         // Restore volumes
         info!("Restoring volumes from snapshot");
@@ -86,7 +92,7 @@ impl RollbackStrategyImpl for SnapshotStrategy {
 
         // Restart containers
         info!("Restarting containers");
-        self.restart_project_containers(&snapshot.project_id).await?;
+        self.restart_project_containers(&deploy_dir).await?;
 
         info!("Snapshot rollback completed");
         Ok(())
@@ -379,27 +385,69 @@ impl SnapshotStrategy {
         db_backup_path: &str,
     ) -> Result<()> {
         let backup_path = std::path::Path::new(db_backup_path);
-
-        if backup_path.join("postgres_backup.sql").exists() {
-            self.restore_postgres(project_name, &backup_path.join("postgres_backup.sql")).await?;
-        } else if backup_path.join("mysql_backup.sql").exists() {
-            self.restore_mysql(project_name, &backup_path.join("mysql_backup.sql")).await?;
-        } else if backup_path.join("mongodb_backup").exists() {
-            self.restore_mongodb(project_name, &backup_path.join("mongodb_backup")).await?;
+        
+        // Find the appropriate database container for this project
+        let db_container = self.find_db_container(project_name).await.ok();
+        
+        if let Some(container_name) = db_container {
+            if backup_path.join("postgres_backup.sql").exists() {
+                self.restore_postgres(&container_name, &backup_path.join("postgres_backup.sql")).await?;
+            } else if backup_path.join("mysql_backup.sql").exists() {
+                self.restore_mysql(&container_name, &backup_path.join("mysql_backup.sql")).await?;
+            } else if backup_path.join("mongodb_backup").exists() {
+                self.restore_mongodb(&container_name, &backup_path.join("mongodb_backup")).await?;
+            }
+        } else {
+            warn!("No database container found for restoration of project {}", project_name);
+            
+            // Fallback: try default names if discovery failed but backup exists
+            if backup_path.join("postgres_backup.sql").exists() {
+                let fallback = format!("{}-db", project_name);
+                self.restore_postgres(&fallback, &backup_path.join("postgres_backup.sql")).await?;
+            }
         }
 
         Ok(())
     }
 
-    async fn restore_postgres(&self, project_name: &str, backup_file: &std::path::Path) -> Result<()> {
-        let container_name = format!("{}-db", project_name);
+    async fn find_db_container(&self, project_name: &str) -> Result<String> {
+        let docker = bollard::Docker::connect_with_socket_defaults()?;
+        let containers = docker.list_containers::<String>(None).await?;
 
+        for container in containers {
+            if let Some(names) = container.names {
+                for name in names {
+                    let name = name.trim_start_matches('/');
+                    if name.contains(project_name) {
+                        if let Some(image) = &container.image {
+                            let image = image.to_lowercase();
+                            if image.contains("postgres") || image.contains("mysql") || 
+                               image.contains("mariadb") || image.contains("mongo") {
+                                return Ok(name.to_string());
+                            }
+                        }
+                        
+                        // Also check name for database keywords
+                        let name_lower = name.to_lowercase();
+                        if name_lower.contains("db") || name_lower.contains("postgres") || 
+                           name_lower.contains("mysql") || name_lower.contains("mongo") {
+                            return Ok(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!("No database container found")
+    }
+
+    async fn restore_postgres(&self, container_name: &str, backup_file: &std::path::Path) -> Result<()> {
         info!("Restoring PostgreSQL database to {}", container_name);
 
         let backup_content = tokio::fs::read_to_string(backup_file).await?;
 
         let mut child = tokio::process::Command::new("docker")
-            .args(&["exec", "-i", &container_name, "psql", "-U", "postgres"])
+            .args(&["exec", "-i", container_name, "psql", "-U", "postgres"])
             .stdin(std::process::Stdio::piped())
             .spawn()
             .context("Failed to spawn psql")?;
@@ -421,15 +469,13 @@ impl SnapshotStrategy {
         Ok(())
     }
 
-    async fn restore_mysql(&self, project_name: &str, backup_file: &std::path::Path) -> Result<()> {
-        let container_name = format!("{}-db", project_name);
-
+    async fn restore_mysql(&self, container_name: &str, backup_file: &std::path::Path) -> Result<()> {
         info!("Restoring MySQL database to {}", container_name);
 
         let backup_content = tokio::fs::read_to_string(backup_file).await?;
 
         let mut child = tokio::process::Command::new("docker")
-            .args(&["exec", "-i", &container_name, "mysql", "-u", "root"])
+            .args(&["exec", "-i", container_name, "mysql", "-u", "root"])
             .stdin(std::process::Stdio::piped())
             .spawn()
             .context("Failed to spawn mysql")?;
@@ -451,15 +497,13 @@ impl SnapshotStrategy {
         Ok(())
     }
 
-    async fn restore_mongodb(&self, project_name: &str, backup_dir: &std::path::Path) -> Result<()> {
-        let container_name = format!("{}-db", project_name);
-
+    async fn restore_mongodb(&self, container_name: &str, backup_dir: &std::path::Path) -> Result<()> {
         info!("Restoring MongoDB database to {}", container_name);
 
         let output = tokio::process::Command::new("docker")
             .args(&[
                 "exec",
-                &container_name,
+                container_name,
                 "mongorestore",
                 &backup_dir.to_string_lossy(),
             ])
@@ -477,10 +521,10 @@ impl SnapshotStrategy {
         Ok(())
     }
 
-    async fn stop_project_containers(&self, project_name: &str) -> Result<()> {
+    async fn stop_project_containers(&self, deploy_dir: &str) -> Result<()> {
         let output = tokio::process::Command::new("docker")
             .args(&["compose", "down"])
-            .current_dir(format!("/home/user/apps/{}", project_name))
+            .current_dir(deploy_dir)
             .output()
             .await
             .context("Failed to stop containers")?;
@@ -495,10 +539,10 @@ impl SnapshotStrategy {
         Ok(())
     }
 
-    async fn restart_project_containers(&self, project_name: &str) -> Result<()> {
+    async fn restart_project_containers(&self, deploy_dir: &str) -> Result<()> {
         let output = tokio::process::Command::new("docker")
             .args(&["compose", "up", "-d"])
-            .current_dir(format!("/home/user/apps/{}", project_name))
+            .current_dir(deploy_dir)
             .output()
             .await
             .context("Failed to restart containers")?;

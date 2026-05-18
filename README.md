@@ -15,21 +15,16 @@ Traditional deployment tools either:
 - Don't handle multi-project VPS setups
 - Break existing infrastructure
 
-**Shipwright is different.** It:
-- ✅ Auto-detects existing infrastructure (Caddy, Nginx, Traefik, shared databases)
-- ✅ Deploys to existing directory structures (`~/apps`, `/opt/apps`)
-- ✅ Works with shared resources (PostgreSQL, Redis, Docker networks)
-- ✅ Never breaks existing projects
-- ✅ **Encrypted secret management** (AES-256-GCM) - no secrets in git!
-- ✅ Generates environment files automatically
-- ✅ Fixes file ownership issues
-- ✅ Supports both standalone and docker-compose deployments
-- ✅ Runs comprehensive smoke tests after deployment
-- ✅ **Automatic rollback on failure** - hybrid strategy for fast recovery (5s-60s)
-- ✅ Provides real-time deployment feedback via WebSocket
-- ✅ **Automatic deployments via GitHub webhooks** (push to deploy!)
-- ✅ Secure webhook signature verification (HMAC-SHA256)
-- ✅ Branch-specific deployments (only deploys configured branch)
+**Shipwright is different.** It provides a **Zero-Conf "Push-to-Deploy"** experience (similar to Render or Vercel) but on your own hardware:
+
+- ✅ **Zero-Conf Infrastructure**: Auto-detects Caddy, Nginx, Traefik, and shared databases.
+- ✅ **Frictionless Webhooks**: One-time registration, then just `git push`.
+- ✅ **Integrated Pipeline**: Clones, Builds, Tests, and Deploys in one atomic unit.
+- ✅ **Docker Compose V2 Native**: Uses the modern `docker compose` plugin for robust orchestration.
+- ✅ **Automated Git Trust**: Programmatically handles `safe.directory` for managed repos.
+- ✅ **Encrypted Secrets**: Industry-standard AES-256-GCM management.
+- ✅ **Self-Verifying**: Runs comprehensive smoke tests and **auto-rolls back** on failure.
+- ✅ **Infrastructure-Aware**: Joins existing Docker networks and proxy tiers automatically.
 
 ## Installation
 
