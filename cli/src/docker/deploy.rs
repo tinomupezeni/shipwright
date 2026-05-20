@@ -5,7 +5,7 @@ use bollard::auth::DockerCredentials;
 use dialoguer::{Input, Password, Confirm};
 use futures_util::stream::StreamExt;
 use regex::Regex;
-use tracing::info;
+use tracing::{info, warn};
 use shipwright_common::config::Config;
 use std::collections::HashMap;
 use std::fs;
@@ -1326,18 +1326,62 @@ pub fn execute_remote_command(vps: &shipwright_common::config::VpsConfig, comman
     let mut ssh_cmd = Command::new("ssh");
     ssh_cmd.arg("-i").arg(shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", ""));
     ssh_cmd.arg("-o").arg("StrictHostKeyChecking=no");
+
+    // OS-Aware Transport Strategy
+    // Windows OpenSSH handles Unix sockets differently; we disable multiplexing on Windows
+    // while maintaining performance gains on Unix.
+    let use_multiplexing = cfg!(unix);
+
+    if use_multiplexing {
+        let control_path = format!("~/.ssh/shipwright-{}-{}@{}", env!("CARGO_PKG_NAME"), vps.user, vps.host);
+        ssh_cmd.arg("-o").arg("ControlMaster=auto");
+        ssh_cmd.arg("-o").arg(format!("ControlPath={}", control_path));
+        ssh_cmd.arg("-o").arg("ControlPersist=10m");
+    }
+
     ssh_cmd.arg(format!("{}@{}", vps.user, vps.host));
     ssh_cmd.arg(command);
 
-    let output = ssh_cmd.output().context("Failed to execute ssh command")?;
-    
+    let output = match ssh_cmd.output() {
+        Ok(out) => out,
+        Err(e) => {
+            // Fallback: If multiplexed SSH fails (e.g. socket issues), try a standard connection
+            if use_multiplexing {
+                warn!("Performance Optimization: SSH Multiplexing failed ({}), falling back to standard transport...", e);
+                let mut fallback_cmd = Command::new("ssh");
+                fallback_cmd.arg("-i").arg(shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", ""));
+                fallback_cmd.arg("-o").arg("StrictHostKeyChecking=no");
+                fallback_cmd.arg(format!("{}@{}", vps.user, vps.host));
+                fallback_cmd.arg(command);
+                fallback_cmd.output().context("Standard SSH transport also failed")?
+            } else {
+                return Err(e).context("Failed to execute ssh command");
+            }
+        }
+    };
+
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if !output.status.success() {
+        // High-Signal Error Handling: Detect multiplexing specific failures in stderr
+        if stderr.contains("getsockname failed") || stderr.contains("ControlPath") {
+            if use_multiplexing {
+                warn!("SSH Multiplexing error detected. Falling back...");
+                // Recursive-ish fallback for stderr failures
+                let mut fallback_cmd = Command::new("ssh");
+                fallback_cmd.arg("-i").arg(shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", ""));
+                fallback_cmd.arg("-o").arg("StrictHostKeyChecking=no");
+                fallback_cmd.arg(format!("{}@{}", vps.user, vps.host));
+                fallback_cmd.arg(command);
+                let fallback_out = fallback_cmd.output()?;
+                if fallback_out.status.success() {
+                    return Ok(String::from_utf8_lossy(&fallback_out.stdout).to_string());
+                }
+            }
+        }
         anyhow::bail!("Remote command failed: {}\nStderr: {}", command, stderr);
     }
-
     print!("{}", stdout);
     let _ = std::io::stdout().flush();
     

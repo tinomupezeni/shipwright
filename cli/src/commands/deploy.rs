@@ -68,7 +68,25 @@ pub async fn run(dry_run: bool) -> Result<()> {
             println!("VPS: {}@{}", vps.user, vps.host);
         }
     } else {
-        println!("Starting deployment for {}...", config.project.name);
+        println!("Orchestrating Deployment for {}...", config.project.name);
+        
+        if let Some(vps) = &config.deploy.vps {
+            let multiplexing = cfg!(unix);
+            let conn_status = if multiplexing {
+                "Persistent Session Established (1 prompt required)"
+            } else {
+                "Standard SSH Transport (multiplexing disabled for Windows compatibility)"
+            };
+            println!("🔗 Connection: {}", conn_status);
+        }
+        
+        let health_status = if config.deploy.health.is_some() {
+            "HTTPS-Aware Health Probing Active"
+        } else {
+            "Basic Container Verification Only"
+        };
+        println!("🌐 Network: {}", health_status);
+        println!();
 
         // Handle building phase
         if config.deploy.deploy_type == "docker-compose" {
@@ -206,7 +224,11 @@ async fn check_health(vps: &shipwright_common::config::VpsConfig, health: &shipw
                 Ok(response) => {
                     let status = response.status().as_u16();
                     if expected_codes.contains(&status) {
-                        println!("● HEALTHY: Application responded with {} (Expected one of {:?})", status, expected_codes);
+                        if status == 301 || status == 308 {
+                            println!("✅ SECURE: Received {} (HTTPS required). Health verified via redirect.", status);
+                        } else {
+                            println!("● HEALTHY: Application responded with {} (Expected one of {:?})", status, expected_codes);
+                        }
                         return Ok(());
                     } else {
                         println!("○ UNHEALTHY: Got status {} (Expected one of {:?})", status, expected_codes);
