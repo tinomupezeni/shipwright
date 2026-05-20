@@ -21,7 +21,11 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(update_agent: bool) -> Result<()> {
+    if update_agent {
+        return run_agent_update().await;
+    }
+
     println!("Checking for updates...");
     
     let client = reqwest::Client::builder()
@@ -126,6 +130,34 @@ pub async fn run() -> Result<()> {
     println!("\n✅ Successfully updated to v{}!", latest_version);
     println!("Please restart Shipwright to use the new version.");
     
+    Ok(())
+}
+
+async fn run_agent_update() -> Result<()> {
+    let config_path = std::path::Path::new(".shipwright.yml");
+    if !config_path.exists() {
+        anyhow::bail!("❌ .shipwright.yml not found. Run 'shipwright init' first.");
+    }
+
+    let config_content = fs::read_to_string(config_path)?;
+    let config: shipwright_common::config::Config = serde_yaml::from_str(&config_content)?;
+    let vps = config.deploy.vps.as_ref().context("No VPS configured in .shipwright.yml")?;
+
+    println!("🚀 Triggering remote self-update on Agent ({})...", vps.host);
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:17670/api/v1/agent/update", vps.host);
+    
+    let res = client.post(&url).send().await?;
+    
+    if res.status().is_success() {
+        println!("✅ Agent update triggered successfully.");
+        println!("✨ The remote daemon is now downloading the latest binary and will restart automatically.");
+    } else {
+        let err = res.text().await?;
+        anyhow::bail!("Failed to trigger agent update: {}", err);
+    }
+
     Ok(())
 }
 

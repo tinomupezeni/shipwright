@@ -1,6 +1,6 @@
 /// Version information for Shipwright
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const AGENT_VERSION: &str = "0.1.3";
+pub const AGENT_VERSION: &str = "0.1.1";
 pub const CLI_VERSION: &str = "0.1.1";
 
 /// Get full version string

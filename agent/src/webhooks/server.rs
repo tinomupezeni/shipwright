@@ -69,6 +69,8 @@ pub async fn start_server(addr: &str, state: AppState) -> anyhow::Result<()> {
         // Deployment retry API
         .route("/api/v1/deployments/retry", post(retry_api::retry_deployment))
         .route("/api/v1/deployments/status", post(retry_api::get_deployment_status))
+        // Agent self-update API
+        .route("/api/v1/agent/update", post(handle_agent_self_update))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
@@ -469,4 +471,18 @@ async fn perform_docker_self_update() -> anyhow::Result<()> {
 
     info!("✅ Self-update completed successfully");
     Ok(())
+}
+
+/// Handler for triggering binary-based self-update via API
+async fn handle_agent_self_update() -> impl IntoResponse {
+    info!("Received self-update request via API");
+
+    // Spawn the update process in the background
+    tokio::spawn(async move {
+        if let Err(e) = crate::update::perform_self_update().await {
+            error!("Agent self-update failed: {}", e);
+        }
+    });
+
+    (StatusCode::OK, "Agent self-update triggered. The daemon will restart with the latest version.").into_response()
 }

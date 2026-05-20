@@ -53,7 +53,11 @@ enum Commands {
     /// Show version information
     Version,
     /// Check for and install updates
-    Update,
+    Update {
+        /// Update the remote agent on the VPS
+        #[arg(long)]
+        agent: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -190,8 +194,8 @@ async fn main() -> Result<()> {
         Commands::Version => {
             commands::version::run();
         }
-        Commands::Update => {
-            commands::update::run().await?;
+        Commands::Update { agent } => {
+            commands::update::run(*agent).await?;
         }
     }
 

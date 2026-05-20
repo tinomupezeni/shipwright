@@ -11,6 +11,8 @@ mod secrets;
 mod rollback;
 mod deployment_tracking;
 
+mod update;
+
 use tracing_subscriber;
 use std::sync::{Arc, Mutex};
 use tracing::{info, error};
@@ -180,6 +182,11 @@ async fn main() -> anyhow::Result<()> {
     });
 
     info!("Agent is running. WebSockets: {}, Webhooks: {}", ws_addr, http_addr);
+
+    // Start background update checker
+    tokio::spawn(async move {
+        update::start_update_checker().await;
+    });
 
     // Wait for either server to finish (though they should run forever)
     tokio::select! {
