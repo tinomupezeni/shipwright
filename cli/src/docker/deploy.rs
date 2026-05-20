@@ -4,6 +4,7 @@ use bollard::image::{PushImageOptions, TagImageOptions};
 use bollard::auth::DockerCredentials;
 use dialoguer::{Input, Password, Confirm};
 use futures_util::stream::StreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
 use tracing::{info, warn};
 use shipwright_common::config::Config;
@@ -893,6 +894,12 @@ fn find_compose_file() -> Result<String> {
 fn upload_file(vps: &shipwright_common::config::VpsConfig, local_path: &str, remote_path: &str) -> Result<()> {
     let remote_dest = format!("{}@{}:{}", vps.user, vps.host, remote_path);
 
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::default_spinner()
+        .template("{spinner:.green} Uploading {msg}...")?);
+    pb.set_message(local_path.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(120));
+
     let mut scp_cmd = Command::new("scp");
     scp_cmd.arg("-i").arg(shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", ""));
     scp_cmd.arg("-o").arg("StrictHostKeyChecking=no");
@@ -900,6 +907,9 @@ fn upload_file(vps: &shipwright_common::config::VpsConfig, local_path: &str, rem
     scp_cmd.arg(&remote_dest);
 
     let status = scp_cmd.status().context(format!("Failed to upload {}", local_path))?;
+    
+    pb.finish_and_clear();
+
     if !status.success() {
         anyhow::bail!("Failed to upload {}", local_path);
     }

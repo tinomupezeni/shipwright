@@ -1,11 +1,16 @@
 # Shipwright
 
-> **Intelligent deployment automation for VPS environments**
+> **The Intelligent Production Safeguard for VPS Environments**
 
-Shipwright is a Rust-based deployment tool that automatically detects your existing infrastructure, adapts to your setup, and deploys applications without breaking existing projects. Built for developers who manage multiple projects on a single VPS.
+Shipwright is a high-fidelity Rust deployment orchestrator that automatically detects your existing infrastructure, adapts to your setup, and deploys applications with zero manual friction.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+### 📦 Distribution
+**Shipwright Portable**: Zero-dependency, single-binary orchestrator. No installation required, no Python/Node.js runtime needed. 
+
+- **Windows**: `winget install shipwright` (coming soon) or download `shipwright-windows-x64.exe`
+- **Linux/macOS**: `curl -sS https://get.shipwright.dev | sh`
+
+---
 
 ## Why Shipwright?
 
@@ -17,16 +22,12 @@ Traditional deployment tools either:
 
 **Shipwright is different.** It provides a **Zero-Conf "Push-to-Deploy"** experience (similar to Render or Vercel) but on your own hardware:
 
-- ✅ **Zero-Conf Infrastructure**: Auto-detects Caddy, Nginx, Traefik, and shared databases.
-- ✅ **Frictionless Webhooks**: One-time registration, then just `git push`.
-- ✅ **Integrated Pipeline**: Clones, Builds, Tests, and Deploys in one atomic unit.
-- ✅ **Target-Aware Builds**: Performs a "Hardware Handshake" to optimize builds for your specific VPS CPU (the "NumPy" fix).
-- ✅ **Semantic Health Checks**: Protocol-aware verification that follows redirects and understands modern reverse proxy signals (301/308).
-- ✅ **Integrated "X-Ray" Diagnostics**: Automatically fetches and displays container logs if a deployment fails or enters a crash loop.
-- ✅ **Atomic Blue-Green Swaps**: Performs zero-downtime swaps with remote state locking to prevent deployment conflicts.
-- ✅ **Docker Compose V2 Native**: Uses the modern `docker compose` plugin for robust orchestration.
-- ✅ **Encrypted Secrets**: Industry-standard AES-256-GCM management.
-- ✅ **Self-Updating**: Keep your CLI up-to-date with a single command: `shipwright update`.
+- ✅ **High-Fidelity TUI**: Rich Terminal UI dashboards for live monitoring (`shipwright watch`).
+- ✅ **Target-Aware builds**: Automatically optimizes builds for your specific VPS CPU (the "NumPy" fix).
+- ✅ **Semantic Health Checks**: Protocol-aware verification that follows redirects (301/308).
+- ✅ **Self-Updating**: The tool updates itself and its remote daemon with one command.
+- ✅ **X-Ray Diagnostics**: Automatic log retrieval and post-mortems on deployment failure.
+- ✅ **Atomic Blue-Green Swaps**: Zero-downtime swaps with remote state locking.
 
 ## Installation
 
