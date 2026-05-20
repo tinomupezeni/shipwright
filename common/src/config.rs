@@ -151,6 +151,9 @@ pub struct BuildConfig {
     /// Environment variables for build/deployment
     /// These will be written to .env file if it doesn't exist
     pub environment: Option<std::collections::HashMap<String, String>>,
+
+    /// Path to the .env file to use for deployment
+    pub env_source: Option<String>,
 }
 
 fn default_replicas() -> u32 {
@@ -228,7 +231,9 @@ pub struct HealthConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HttpHealthConfig {
     pub path: String,
-    pub expect: u16,
+    pub expect: Option<u16>,
+    #[serde(default)]
+    pub success_codes: Option<Vec<u16>>,
     pub timeout: String,
 }
 

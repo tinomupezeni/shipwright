@@ -52,6 +52,8 @@ enum Commands {
     Retry,
     /// Show version information
     Version,
+    /// Check for and install updates
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -102,6 +104,9 @@ enum HookAction {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+    
+    // Background update check (silent)
+    let _ = commands::update::check_for_updates_silently().await;
     
     // Ensure .shipwright directory exists
     fs::create_dir_all(".shipwright")?;
@@ -184,6 +189,9 @@ async fn main() -> Result<()> {
         }
         Commands::Version => {
             commands::version::run();
+        }
+        Commands::Update => {
+            commands::update::run().await?;
         }
     }
 

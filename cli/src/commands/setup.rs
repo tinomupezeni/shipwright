@@ -127,6 +127,14 @@ WantedBy=multi-user.target
     // Open range of ports for Agent (WS and Webhooks)
     execute_remote_command(vps, "sudo ufw allow 8081:8090/tcp")?;
 
+    // 5. Hardware Handshake (Target-Aware Build Orchestration)
+    println!("🔍 Performing Hardware Handshake...");
+    execute_remote_command(vps, "sudo mkdir -p /etc/shipwright")?;
+    // We get CPU flags to inject as build arguments
+    let capabilities = execute_remote_command(vps, "grep '^flags' /proc/cpuinfo | head -n 1 | cut -d':' -f2")?;
+    let flags = capabilities.trim().replace(" ", ",");
+    execute_remote_command(vps, &format!("echo 'SHIPWRIGHT_CPU_FLAGS={}' | sudo tee /etc/shipwright/hardware.env", flags))?;
+    
     println!("\n✅ Shipwright Agent is now running as a global daemon.");
     println!("✨ VPS Setup Complete! Your server is now ready for 'shipwright register'.");
     Ok(())

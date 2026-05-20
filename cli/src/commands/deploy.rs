@@ -107,7 +107,8 @@ pub async fn run(dry_run: bool) -> Result<()> {
         
         if let Some(health) = &config.deploy.health {
             if let Some(vps) = &config.deploy.vps {
-                check_health(vps, health).await?;
+                let remote_dir = format!("/home/{}/apps/{}", vps.user, config.project.name);
+                check_health(vps, health, &remote_dir).await?;
             }
         }
 
@@ -159,27 +160,57 @@ async fn run_smoke_tests(vps: &shipwright_common::config::VpsConfig, tests: &Vec
     Ok(())
 }
 
-async fn check_health(vps: &shipwright_common::config::VpsConfig, health: &shipwright_common::config::HealthConfig) -> Result<()> {
+async fn check_health(vps: &shipwright_common::config::VpsConfig, health: &shipwright_common::config::HealthConfig, remote_dir: &str) -> Result<()> {
+    // 1. Verify container is Running via Docker API
+    println!("Checking container states...");
+    let statuses = crate::docker::diagnostics::get_container_statuses(vps, remote_dir)?;
+    for status in statuses {
+        if status.status.to_lowercase().contains("exited") || status.status.to_lowercase().contains("restarting") {
+            println!("○ UNHEALTHY: Container {} is not running (State: {})", status.name, status.status);
+            // Diagnostic X-Ray
+            println!("🔍 Fetching recent logs for {}...", status.name);
+            if let Ok(logs) = crate::docker::deploy::execute_remote_command(vps, &format!("cd {} && docker compose logs --tail 50 {}", remote_dir, status.name)) {
+                println!("--- LOGS ---\n{}\n--- END LOGS ---", logs);
+            }
+            anyhow::bail!("Container {} is not running", status.name);
+        }
+    }
+
     if let Some(http) = &health.http {
         println!("Checking health at http://{}{}", vps.host, http.path);
         
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()?;
         let url = format!("http://{}{}", vps.host, http.path);
         
         // Wait a bit for container to start
         sleep(Duration::from_secs(5)).await;
+        
+        let mut expected_codes = Vec::new();
+        if let Some(expect) = http.expect {
+            expected_codes.push(expect);
+        }
+        if let Some(codes) = &http.success_codes {
+            expected_codes.extend(codes);
+        }
+        if expected_codes.is_empty() {
+            expected_codes.push(200); // Default
+        }
         
         for i in 1..=5 {
             println!("Attempt {}/5...", i);
             let res = client.get(&url).send().await;
             
             match res {
-                Ok(response) if response.status().as_u16() == http.expect => {
-                    println!("● HEALTHY: Application responded with {}", http.expect);
-                    return Ok(());
-                }
                 Ok(response) => {
-                    println!("○ UNHEALTHY: Got status {}", response.status());
+                    let status = response.status().as_u16();
+                    if expected_codes.contains(&status) {
+                        println!("● HEALTHY: Application responded with {} (Expected one of {:?})", status, expected_codes);
+                        return Ok(());
+                    } else {
+                        println!("○ UNHEALTHY: Got status {} (Expected one of {:?})", status, expected_codes);
+                    }
                 }
                 Err(e) => {
                     println!("○ UNHEALTHY: Connection failed: {}", e);

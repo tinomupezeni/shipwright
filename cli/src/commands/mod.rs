@@ -11,3 +11,4 @@ pub mod update_agent;
 pub mod secrets;
 pub mod version;
 pub mod retry;
+pub mod update;

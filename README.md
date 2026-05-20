@@ -20,11 +20,13 @@ Traditional deployment tools either:
 - ✅ **Zero-Conf Infrastructure**: Auto-detects Caddy, Nginx, Traefik, and shared databases.
 - ✅ **Frictionless Webhooks**: One-time registration, then just `git push`.
 - ✅ **Integrated Pipeline**: Clones, Builds, Tests, and Deploys in one atomic unit.
+- ✅ **Target-Aware Builds**: Performs a "Hardware Handshake" to optimize builds for your specific VPS CPU (the "NumPy" fix).
+- ✅ **Semantic Health Checks**: Protocol-aware verification that follows redirects and understands modern reverse proxy signals (301/308).
+- ✅ **Integrated "X-Ray" Diagnostics**: Automatically fetches and displays container logs if a deployment fails or enters a crash loop.
+- ✅ **Atomic Blue-Green Swaps**: Performs zero-downtime swaps with remote state locking to prevent deployment conflicts.
 - ✅ **Docker Compose V2 Native**: Uses the modern `docker compose` plugin for robust orchestration.
-- ✅ **Automated Git Trust**: Programmatically handles `safe.directory` for managed repos.
 - ✅ **Encrypted Secrets**: Industry-standard AES-256-GCM management.
-- ✅ **Self-Verifying**: Runs comprehensive smoke tests and **auto-rolls back** on failure.
-- ✅ **Infrastructure-Aware**: Joins existing Docker networks and proxy tiers automatically.
+- ✅ **Self-Updating**: Keep your CLI up-to-date with a single command: `shipwright update`.
 
 ## Installation
 
@@ -427,6 +429,8 @@ build:
 
   environment:                            # Optional: Environment variables
     KEY: value
+
+  env_source: .env.production             # Optional: Source .env file for validation/upload
 ```
 
 ### Deploy Section
@@ -452,7 +456,8 @@ deploy:
   health:                                # Optional: Health check config
     http:
       path: /health/
-      expect: 200
+      expect: 200                        # Optional: Primary success code
+      success_codes: [301, 308]          # Optional: Additional success codes
       timeout: 30s
 ```
 

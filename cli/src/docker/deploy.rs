@@ -146,18 +146,45 @@ pub async fn deploy_image(config: &Config) -> Result<()> {
     Ok(())
 }
 
+struct RemoteLock<'a> {
+    vps: &'a shipwright_common::config::VpsConfig,
+    lock_file: String,
+}
+
+impl<'a> RemoteLock<'a> {
+    fn acquire(vps: &'a shipwright_common::config::VpsConfig, remote_dir: &str) -> Result<Self> {
+        let lock_file = format!("{}/.shipwright.lock", remote_dir);
+        let lock_check = execute_remote_command(vps, &format!("mkdir -p {} && if [ -f {} ]; then echo 'locked'; else echo 'free'; fi", remote_dir, lock_file))?;
+        if lock_check.trim() == "locked" {
+            anyhow::bail!("Deployment is locked by another process. Please wait or remove {} manually if stuck.", lock_file);
+        }
+        execute_remote_command(vps, &format!("touch {}", lock_file))?;
+        Ok(Self { vps, lock_file })
+    }
+}
+
+impl<'a> Drop for RemoteLock<'a> {
+    fn drop(&mut self) {
+        let _ = execute_remote_command(self.vps, &format!("rm -f {}", self.lock_file));
+    }
+}
+
 fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Config) -> Result<()> {
     info!("Deploying with docker-compose to {}...", vps.host);
 
     // Determine remote directory
     let remote_dir = format!("/home/{}/apps/{}", vps.user, config.project.name);
+    
+    // Acquire deployment lock
+    println!("🔒 Acquiring deployment lock...");
+    let _lock = RemoteLock::acquire(vps, &remote_dir)?;
 
     // 1. Get compose file from config or find it
     let compose_file = config.build.compose_file.clone().unwrap_or_else(|| find_compose_file().unwrap());
     println!("📄 Found compose file: {}", compose_file);
 
     // 2. Check for .env file - skip if doesn't exist locally (may be on VPS already)
-    let env_file = match ensure_env_file_optional(&compose_file) {
+    let env_file = match ensure_env_file_optional(&compose_file, config)? {
         Some(f) => {
             println!("📄 Using local env file: {}", f);
             Some(f)
@@ -201,7 +228,7 @@ fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Conf
         for img in &custom_images {
             println!("   • {} -> {}", img.service_name, img.full_image);
         }
-        build_and_push_missing_images(&custom_images, &env_vars)?;
+        build_and_push_missing_images(&custom_images, &env_vars, vps)?;
     }
 
     // 8. Authenticate with container registries if needed (for any remaining private registries)
@@ -453,15 +480,39 @@ fn parse_env_file(path: &str) -> HashMap<String, String> {
 }
 
 /// Optional .env file - returns None if doesn't exist locally (assumes it's on VPS)
-fn ensure_env_file_optional(compose_file: &str) -> Option<String> {
-    // Check for existing .env files
-    if fs::metadata(".env").is_ok() {
+fn ensure_env_file_optional(compose_file: &str, config: &Config) -> Result<Option<String>> {
+    let env_file = if let Some(source) = &config.build.env_source {
+        if fs::metadata(source).is_ok() {
+            Some(source.clone())
+        } else {
+            anyhow::bail!("Specified env_source '{}' not found", source);
+        }
+    } else if fs::metadata(".env").is_ok() {
         Some(".env".to_string())
     } else if fs::metadata(".env.production").is_ok() {
         Some(".env.production".to_string())
     } else {
         None
+    };
+
+    // Environment Validation check
+    if let Some(ref file) = env_file {
+        if let Ok(compose_content) = fs::read_to_string(compose_file) {
+            let required_vars = parse_required_env_vars(&compose_content);
+            let existing_vars = parse_env_file(file);
+            let mut missing = Vec::new();
+            for (var, _) in required_vars {
+                if !existing_vars.contains_key(&var) || existing_vars.get(&var).unwrap().is_empty() {
+                    missing.push(var);
+                }
+            }
+            if !missing.is_empty() {
+                anyhow::bail!("Environment Validation Failed! Missing variables in {}: {:?}", file, missing);
+            }
+        }
     }
+
+    Ok(env_file)
 }
 
 /// Ensure .env file exists with all required variables, prompting user for missing ones
@@ -955,12 +1006,32 @@ fn setup_caddy_proxy(vps: &shipwright_common::config::VpsConfig, domain: &str, p
 fn deploy_to_vps(vps: &shipwright_common::config::VpsConfig, image: &str, container_name: &str) -> Result<()> {
     info!("Deploying {} to VPS at {}...", container_name, vps.host);
     
+    let temp_name = format!("{}_v2", container_name);
+    
     execute_remote_command(vps, &format!("docker pull {}", image))?;
+    
+    // Clean up any lingering temp containers
+    execute_remote_command(vps, &format!("docker stop {} || true", temp_name))?;
+    execute_remote_command(vps, &format!("docker rm {} || true", temp_name))?;
+    
+    // Start the new container
+    execute_remote_command(vps, &format!("docker run -d --name {} {} ", temp_name, image))?;
+    
+    // Verify health of new container before swapping
+    // Simple sleep to let it boot, a real healthcheck could be more robust
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let status = execute_remote_command(vps, &format!("docker inspect -f '{{{{.State.Status}}}}' {}", temp_name))?;
+    if status.trim() != "running" {
+        execute_remote_command(vps, &format!("docker rm -f {}", temp_name))?;
+        anyhow::bail!("New container failed to start properly. Deployment aborted.");
+    }
+    
+    // Perform Atomic Swap
     execute_remote_command(vps, &format!("docker stop {} || true", container_name))?;
     execute_remote_command(vps, &format!("docker rm {} || true", container_name))?;
-    execute_remote_command(vps, &format!("docker run -d --name {} {} ", container_name, image))?;
+    execute_remote_command(vps, &format!("docker rename {} {}", temp_name, container_name))?;
 
-    info!("Successfully deployed to VPS!");
+    info!("Successfully deployed to VPS using Blue-Green swap!");
     Ok(())
 }
 
@@ -1144,11 +1215,22 @@ fn check_image_exists_on_hub(image: &str) -> bool {
 }
 
 /// Build and push missing images to Docker Hub
-fn build_and_push_missing_images(images: &[CustomImage], env_vars: &HashMap<String, String>) -> Result<()> {
+fn build_and_push_missing_images(images: &[CustomImage], env_vars: &HashMap<String, String>, vps: &shipwright_common::config::VpsConfig) -> Result<()> {
     let registry = env_vars.get("DOCKER_REGISTRY").cloned().unwrap_or_default();
 
     if registry.is_empty() {
         anyhow::bail!("DOCKER_REGISTRY not set in .env file. Please set it to your Docker Hub username.");
+    }
+
+    // Target-Aware Build Orchestration: Fetch hardware capabilities
+    let mut build_args = Vec::new();
+    if let Ok(hw_env) = execute_remote_command(vps, "cat /etc/shipwright/hardware.env 2>/dev/null || true") {
+        for line in hw_env.lines() {
+            if line.starts_with("SHIPWRIGHT_CPU_FLAGS=") {
+                build_args.push(line.to_string());
+                println!("🎯 Target-Aware Build: Injected CPU flags for optimized build.");
+            }
+        }
     }
 
     // First, authenticate with Docker Hub if needed
@@ -1206,6 +1288,11 @@ fn build_and_push_missing_images(images: &[CustomImage], env_vars: &HashMap<Stri
         let mut build_cmd = Command::new("docker");
         build_cmd.args(["build", "-t", &image.full_image]);
         build_cmd.args(["-f", &format!("{}/{}", build_context, dockerfile)]);
+        
+        for arg in &build_args {
+            build_cmd.args(["--build-arg", arg]);
+        }
+        
         build_cmd.arg(build_context);
 
         let build_status = build_cmd.status().context(format!("Failed to build {}", image.service_name))?;
