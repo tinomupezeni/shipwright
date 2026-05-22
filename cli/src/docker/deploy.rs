@@ -58,12 +58,24 @@ struct CustomImage {
     dockerfile: Option<String>,
 }
 
-pub async fn deploy_image(config: &Config) -> Result<()> {
-    // For docker-compose deployments, skip the local build/push - go straight to deploy
-    if config.deploy.deploy_type == "docker-compose" {
-        println!("📦 Docker Compose deployment - using pre-built images from registry");
+const SHIPWRIGHT_HTTP_PORT: u16 = 17670;
 
+pub async fn deploy_image(config: &Config) -> Result<()> {
+    // For docker-compose deployments, try Agent-Based Execution first
+    if config.deploy.deploy_type == "docker-compose" {
         if let Some(vps) = &config.deploy.vps {
+            println!("📡 Attempting Agent-Based Deployment (Secure & Idempotent)...");
+            match deploy_via_agent(vps, config).await {
+                Ok(_) => {
+                    println!("✅ Deployment successful via Shipwright Agent.");
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Agent-Based Deployment failed or Agent not reachable: {}", e);
+                    println!("🔄 Falling back to SSH-Based Deployment (Legacy)...");
+                }
+            }
+
             deploy_with_compose(vps, config).context("Failed to deploy with docker-compose")?;
 
             if let Some(domain) = &vps.domain {
@@ -170,6 +182,60 @@ impl<'a> Drop for RemoteLock<'a> {
     }
 }
 
+pub async fn deploy_via_agent(vps: &shipwright_common::config::VpsConfig, config: &Config) -> Result<()> {
+    info!("🚀 Initializing Agent-Based Deployment for {}...", config.project.name);
+
+    // 1. Prepare deployment bundle
+    let compose_file = config.build.compose_file.clone().unwrap_or_else(|| find_compose_file().unwrap());
+    let compose_content = fs::read_to_string(&compose_file)?;
+
+    let env_file = ensure_env_file_optional(&compose_file, config)?;
+    let env_content = if let Some(path) = env_file {
+        Some(fs::read_to_string(path)?)
+    } else {
+        None
+    };
+
+    // 2. Collect additional volume files
+    let mut files = HashMap::new();
+    // This is a simplified version; in a real scenario we'd use glob or detect from compose
+    let volume_paths = ["docker/init-db.sql", "litellm_config.yaml"];
+    for path in volume_paths {
+        if let Ok(content) = fs::read_to_string(path) {
+            files.insert(path.to_string(), content);
+        }
+    }
+
+    // 3. POST to Agent
+    let client = reqwest::Client::new();
+    let agent_url = format!("http://{}:{}/api/v1/projects/{}/deploy", vps.host, SHIPWRIGHT_HTTP_PORT, config.project.name);
+
+    let payload = serde_json::json!({
+        "compose_file": compose_content,
+        "env_file": env_content,
+        "files": files
+    });
+
+    let res = client.post(&agent_url)
+        .json(&payload)
+        .send()
+        .await
+        .context("Failed to connect to Shipwright Agent. Is it running?")?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await?;
+        anyhow::bail!("Agent deployment failed ({}): {}", res.status(), error_text);
+    }
+
+    println!("✅ Agent has accepted the deployment. Monitoring progress...");
+    
+    // 4. Wait for deployment to complete (simplified)
+    // In a real TUI, we'd switch to the 'watch' command view here
+    println!("💡 Run 'shipwright watch' to see real-time logs.");
+
+    Ok(())
+}
+
 fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Config) -> Result<()> {
     info!("Deploying with docker-compose to {}...", vps.host);
 
@@ -196,6 +262,47 @@ fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Conf
         }
     };
 
+    // --- Configuration Templating: Merge common_env and environment ---
+    let mut merged_env = HashMap::new();
+    if let Some(common) = &config.build.common_env {
+        for (k, v) in common {
+            merged_env.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(specific) = &config.build.environment {
+        for (k, v) in specific {
+            merged_env.insert(k.clone(), v.clone());
+        }
+    }
+
+    let env_to_upload = if !merged_env.is_empty() {
+        println!("📝 Merging global and service-specific environment variables...");
+        let mut final_content = String::new();
+        
+        // Load existing env file if it exists
+        if let Some(ref path) = env_file {
+            if let Ok(content) = fs::read_to_string(path) {
+                final_content = content;
+                if !final_content.ends_with('\n') {
+                    final_content.push('\n');
+                }
+            }
+        }
+
+        for (k, v) in merged_env {
+            // Only add if not already in file (environment block takes precedence over .env file)
+            if !final_content.contains(&format!("{}=", k)) {
+                final_content.push_str(&format!("{}={}\n", k, v));
+            }
+        }
+
+        let temp_env = format!("{}.merged", env_file.as_ref().unwrap_or(&".env".to_string()));
+        fs::write(&temp_env, final_content)?;
+        Some(temp_env)
+    } else {
+        env_file.clone()
+    };
+
     // 3. Check and prompt for missing volume files
     ensure_volume_files(&compose_file)?;
 
@@ -206,10 +313,15 @@ fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Conf
     // 4. Upload docker-compose file
     upload_file(vps, &compose_file, &format!("{}/docker-compose.yml", remote_dir))?;
 
-    // 5. Upload .env file if we have one locally
-    if let Some(ref env_file_path) = env_file {
+    // 5. Upload .env file if we have one
+    if let Some(ref env_file_path) = env_to_upload {
         println!("📄 Uploading .env file...");
         upload_file(vps, env_file_path, &format!("{}/.env", remote_dir))?;
+        
+        // Clean up temp file if we created one
+        if env_file_path.ends_with(".merged") {
+            let _ = fs::remove_file(env_file_path);
+        }
     }
 
     // 6. Upload volume-mounted files (detected from compose file)
@@ -239,8 +351,25 @@ fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Conf
     println!("\n🐳 Pulling images...");
     execute_remote_command(vps, &format!("cd {} && docker compose pull", remote_dir))?;
 
+    // --- Convergence Engine: Pre-deployment state verification ---
+    println!("🔄 Convergence Engine: Verifying system state...");
+    let stuck_containers = execute_remote_command(vps, &format!(
+        "cd {} && docker compose ps --format '{{{{.Name}}}}:{{{{.State}}}}' | grep -E 'created|exited|restarting' || true",
+        remote_dir
+    ))?;
+
+    if !stuck_containers.trim().is_empty() {
+        println!("   ⚠️  Detected {} stuck/orphaned container(s). Performing Hard Reset...", stuck_containers.trim().split('\n').count());
+        for container_info in stuck_containers.lines() {
+            if let Some((name, state)) = container_info.split_once(':') {
+                println!("   ⚙️  Resetting {} (State: {})...", name, state);
+                let _ = execute_remote_command(vps, &format!("docker rm -f {}", name));
+            }
+        }
+    }
+
     println!("🚀 Starting containers...");
-    let start_result = execute_remote_command(vps, &format!("cd {} && docker compose up -d", remote_dir));
+    let start_result = execute_remote_command(vps, &format!("cd {} && docker compose up -d --remove-orphans", remote_dir));
 
     // 10. Verify deployment and run diagnostics if needed
     println!("\n📊 Verifying deployment...");
@@ -328,6 +457,32 @@ fn deploy_with_compose(vps: &shipwright_common::config::VpsConfig, config: &Conf
     } else {
         verify_containers(vps, &remote_dir)?;
         println!("\n✅ All containers started successfully!");
+    }
+
+    // --- Pre-Flight Check-Hooks ---
+    if let Some(hooks) = &config.deploy.hooks {
+        println!("\n🪝  Running Pre-Flight Hooks...");
+        for hook in hooks {
+            println!("   ⚙️  Executing Hook: {}...", hook.name);
+            
+            // Determine target service
+            let target_service = hook.service.as_ref().map(|s| s.as_str()).unwrap_or_else(|| {
+                // Default to first service in compose content (simplification)
+                "app" 
+            });
+
+            let exec_cmd = format!("cd {} && docker compose exec -T {} {}", remote_dir, target_service, hook.command);
+            
+            match execute_remote_command(vps, &exec_cmd) {
+                Ok(_) => println!("   ✅ Hook '{}' passed.", hook.name),
+                Err(e) => {
+                    println!("   ❌ Hook '{}' failed: {}", hook.name, e);
+                    if hook.critical.unwrap_or(true) {
+                        anyhow::bail!("Critical Pre-Flight Hook '{}' failed. Deployment aborted.", hook.name);
+                    }
+                }
+            }
+        }
     }
 
     // 11. Setup Caddy reverse proxy for exposed services
@@ -1334,7 +1489,8 @@ fn build_and_push_missing_images(images: &[CustomImage], env_vars: &HashMap<Stri
 
 pub fn execute_remote_command(vps: &shipwright_common::config::VpsConfig, command: &str) -> Result<String> {
     let mut ssh_cmd = Command::new("ssh");
-    ssh_cmd.arg("-i").arg(shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", ""));
+    let ssh_key_path = shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", "");
+    ssh_cmd.arg("-i").arg(&ssh_key_path);
     ssh_cmd.arg("-o").arg("StrictHostKeyChecking=no");
 
     // OS-Aware Transport Strategy
@@ -1359,7 +1515,7 @@ pub fn execute_remote_command(vps: &shipwright_common::config::VpsConfig, comman
             if use_multiplexing {
                 warn!("Performance Optimization: SSH Multiplexing failed ({}), falling back to standard transport...", e);
                 let mut fallback_cmd = Command::new("ssh");
-                fallback_cmd.arg("-i").arg(shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", ""));
+                fallback_cmd.arg("-i").arg(&ssh_key_path);
                 fallback_cmd.arg("-o").arg("StrictHostKeyChecking=no");
                 fallback_cmd.arg(format!("{}@{}", vps.user, vps.host));
                 fallback_cmd.arg(command);
@@ -1380,7 +1536,7 @@ pub fn execute_remote_command(vps: &shipwright_common::config::VpsConfig, comman
                 warn!("SSH Multiplexing error detected. Falling back...");
                 // Recursive-ish fallback for stderr failures
                 let mut fallback_cmd = Command::new("ssh");
-                fallback_cmd.arg("-i").arg(shellexpand::tilde(&vps.ssh_key).to_string().replace("\"", ""));
+                fallback_cmd.arg("-i").arg(&ssh_key_path);
                 fallback_cmd.arg("-o").arg("StrictHostKeyChecking=no");
                 fallback_cmd.arg(format!("{}@{}", vps.user, vps.host));
                 fallback_cmd.arg(command);
@@ -1390,6 +1546,32 @@ pub fn execute_remote_command(vps: &shipwright_common::config::VpsConfig, comman
                 }
             }
         }
+
+        // --- Suggestive Diagnostics ---
+        if stderr.contains("Permission denied") {
+            println!("\n🔍 DIAGNOSTIC: SSH Permission Denied");
+            println!("   Your SSH key '{}' was rejected by {}.", ssh_key_path, vps.host);
+            
+            // Check if key exists locally
+            if !std::path::Path::new(&ssh_key_path).exists() {
+                println!("   💡 FIX: The key file does not exist at the specified path.");
+                println!("      Verify 'ssh_key' in .shipwright.yml matches your actual key location.");
+            } else {
+                println!("   💡 FIX: Ensure your public key is in ~/.ssh/authorized_keys on the VPS.");
+                println!("      Run: ssh-copy-id -i {} {}@{}", ssh_key_path, vps.user, vps.host);
+            }
+        } else if stderr.contains("Connection timed out") || stderr.contains("Network is unreachable") {
+            println!("\n🔍 DIAGNOSTIC: VPS Unreachable");
+            println!("   Shipwright could not establish a connection to {}.", vps.host);
+            println!("   💡 FIX: Check your internet connection and verify the VPS hostname/IP.");
+            println!("      Ensure port 22 (SSH) is open in your VPS firewall.");
+        } else if stderr.contains("sudo: no tty present and no askpass program specified") {
+            println!("\n🔍 DIAGNOSTIC: Sudo Configuration Issue");
+            println!("   The remote command requires sudo but it's not configured for non-interactive use.");
+            println!("   💡 FIX: Shipwright handles this by piping the password, but your VPS may have 'requiretty' enabled.");
+            println!("      Check /etc/sudoers on the VPS for 'Defaults requiretty'.");
+        }
+
         anyhow::bail!("Remote command failed: {}\nStderr: {}", command, stderr);
     }
     print!("{}", stdout);

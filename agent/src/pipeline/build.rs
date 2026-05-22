@@ -21,6 +21,7 @@ pub async fn run_pipeline(
     tx: broadcast::Sender<AgentMessage>,
     db: Arc<Mutex<Connection>>,
     config: Option<Config>,
+    source_dir: Option<String>,
 ) -> Result<String> {
     info!("Starting infrastructure-aware pipeline for project: {}", project_name);
 
@@ -31,15 +32,20 @@ pub async fn run_pipeline(
         event: BuildEvent::Started,
     });
 
-    // 1. Clone repository
-    let build_dir = match clone_repo(repo_url, project_name).await {
-        Ok(dir) => dir,
-        Err(e) => {
-            let _ = tx.send(AgentMessage::BuildUpdate {
-                project_name: project_name.to_string(),
-                event: BuildEvent::Failed(format!("Clone failed: {}", e)),
-            });
-            return Err(e);
+    // 1. Determine build directory (clone or local)
+    let build_dir = if let Some(local_dir) = source_dir {
+        info!("📦 Using local source directory: {}", local_dir);
+        PathBuf::from(local_dir)
+    } else {
+        match clone_repo(repo_url, project_name).await {
+            Ok(dir) => dir,
+            Err(e) => {
+                let _ = tx.send(AgentMessage::BuildUpdate {
+                    project_name: project_name.to_string(),
+                    event: BuildEvent::Failed(format!("Clone failed: {}", e)),
+                });
+                return Err(e);
+            }
         }
     };
 

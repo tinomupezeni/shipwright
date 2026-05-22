@@ -67,9 +67,12 @@ pub async fn start_server(addr: &str, state: AppState) -> anyhow::Result<()> {
         .route("/api/v1/secrets/:name", post(secrets_api::get_secret))
         .route("/api/v1/secrets/:name/delete", post(secrets_api::delete_secret))
         // Deployment retry API
-        .route("/api/v1/deployments/retry", post(retry_api::retry_deployment))
-        .route("/api/v1/deployments/status", post(retry_api::get_deployment_status))
+        .route(\"/api/v1/deployments/retry\", post(retry_api::retry_deployment))
+        .route(\"/api/v1/deployments/status\", post(retry_api::get_deployment_status))
+        // Direct Deployment API (Agent-Based Execution)
+        .route(\"/api/v1/projects/:name/deploy\", post(handle_direct_deploy))
         // Agent self-update API
+
         .route("/api/v1/agent/update", post(handle_agent_self_update))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
@@ -251,7 +254,8 @@ async fn handle_github_webhook(
                 &repo_url,
                 tx,
                 db,
-                None,  // New webhook deployment
+                None,  // config
+                None,  // source_dir (clone from Git)
             ).await {
                 error!("Pipeline failed for {}: {}", project_name, e);
             }
@@ -471,6 +475,97 @@ async fn perform_docker_self_update() -> anyhow::Result<()> {
 
     info!("✅ Self-update completed successfully");
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectDeployment {
+    pub compose_file: String,
+    pub env_file: Option<String>,
+    pub files: Option<std::collections::HashMap<String, String>>, // path -> base64 or raw content
+}
+
+async fn handle_direct_deploy(
+    State(state): State<AppState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(payload): Json<DirectDeployment>
+) -> impl IntoResponse {
+    info!("🚀 Received Direct Deployment request for project: {}", name);
+
+    // 1. Get project details from database
+    let project_id: Option<String> = {
+        let db = state.db.lock().unwrap();
+        db.query_row(
+            "SELECT id FROM projects WHERE name = ?1",
+            [&name],
+            |row| Ok(row.get(0)?),
+        ).ok()
+    };
+
+    let project_id = match project_id {
+        Some(id) => id,
+        None => {
+            warn!("Project {} not registered. Registering automatically...", name);
+            let id = uuid::Uuid::new_v4().to_string();
+            let db = state.db.lock().unwrap();
+            let _ = db.execute(
+                "INSERT INTO projects (id, name, repo_url, webhook_secret, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (&id, &name, "direct://push", "none", chrono::Utc::now().timestamp()),
+            );
+            id
+        }
+    };
+
+    // 2. Prepare deployment directory
+    let deploy_dir = format!("/tmp/shipwright/deploy/{}", name);
+    if let Err(e) = std::fs::create_dir_all(&deploy_dir) {
+        error!("Failed to create deploy directory: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to prepare deployment directory").into_response();
+    }
+
+    // 3. Write files
+    if let Err(e) = std::fs::write(format!("{}/docker-compose.yml", deploy_dir), &payload.compose_file) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write compose file: {}", e)).into_response();
+    }
+
+    if let Some(env) = payload.env_file {
+        let _ = std::fs::write(format!("{}/.env", deploy_dir), env);
+    }
+
+    if let Some(files) = payload.files {
+        for (path, content) in files {
+            let full_path = std::path::Path::new(&deploy_dir).join(path);
+            if let Some(parent) = full_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(full_path, content);
+        }
+    }
+
+    // 4. Trigger pipeline
+    let tx = state.broadcast_tx.clone();
+    let db = state.db.clone();
+    let project_id_clone = project_id.clone();
+    let name_clone = name.clone();
+    let deploy_dir_clone = deploy_dir.clone();
+    
+    // Spawn the pipeline in the background
+    tokio::spawn(async move {
+        info!("Pipeline triggered via Direct Push for {}.", name_clone);
+        
+        if let Err(e) = crate::pipeline::build::run_pipeline(
+            &project_id_clone,
+            &name_clone,
+            "direct://push",
+            tx,
+            db,
+            None,
+            Some(deploy_dir_clone),
+        ).await {
+            error!("Direct pipeline failed for {}: {}", name_clone, e);
+        }
+    });
+
+    (StatusCode::OK, "Direct deployment initiated").into_response()
 }
 
 /// Handler for triggering binary-based self-update via API

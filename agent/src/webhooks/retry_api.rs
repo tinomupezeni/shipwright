@@ -126,6 +126,7 @@ pub async fn retry_deployment(
             tx_clone,
             db_clone,
             None,
+            None,
         ).await {
             error!("Retry deployment failed for {}: {}", project_name_clone, e);
         }

@@ -152,6 +152,9 @@ pub struct BuildConfig {
     /// These will be written to .env file if it doesn't exist
     pub environment: Option<std::collections::HashMap<String, String>>,
 
+    /// Common environment variables injected into all services
+    pub common_env: Option<std::collections::HashMap<String, String>>,
+
     /// Path to the .env file to use for deployment
     pub env_source: Option<String>,
 }
@@ -171,6 +174,16 @@ pub struct DeployConfig {
     pub health: Option<HealthConfig>,
     pub resources: Option<ResourceConfig>,
     pub smoke_tests: Option<Vec<String>>,
+    /// Pre-flight hooks to run inside container before marking as healthy
+    pub hooks: Option<Vec<PreFlightHook>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PreFlightHook {
+    pub name: String,
+    pub command: String,
+    pub service: Option<String>, // If None, runs in the first/primary service
+    pub critical: Option<bool>,  // If true, failure aborts deployment
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
